@@ -178,7 +178,7 @@ class PaperflowTui(App):
                     yield Input(value="cnki+scihub+oa+publisher", placeholder="PDF 下载通道", id="download-mode")
                     yield Input(value="downloads", placeholder="输出目录", id="download-out")
                     yield Input(value="100", placeholder="条数", id="download-limit", type="integer")
-                    yield Input(value="30", placeholder="每分钟", id="download-rpm", type="integer")
+                    yield Input(value="60", placeholder="每分钟（推荐 60）", id="download-rpm", type="integer")
                 with Horizontal(classes="form-row"):
                     yield Input(placeholder="最低影响因子", id="download-min-if", type="number")
                     yield Input(placeholder="最高影响因子", id="download-max-if", type="number")

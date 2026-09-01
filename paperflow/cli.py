@@ -433,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     p_dd.add_argument("--min-if", type=float, default=None, help="最低影响因子（需先导入 JIF）")
     p_dd.add_argument("--max-if", type=float, default=None, help="最高影响因子（需先导入 JIF）")
     p_dd.add_argument("--limit", type=int, default=100)
-    p_dd.add_argument("--rpm", type=int, default=30)
+    p_dd.add_argument("--rpm", type=int, default=60, help="下载限速（推荐 60，即每篇约 1 秒）")
     p_dd.add_argument("--email", default="")
     p_dd.set_defaults(fn=cmd_download_db)
 
