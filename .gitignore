@@ -1,0 +1,49 @@
+# Python 环境、缓存与构建产物
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+build/
+dist/
+
+# 本机配置与授权信息
+.env
+sessions/
+scihub_cookies.json
+
+# 运行日志和中间清单
+*.log
+*.tsv
+download_failed.txt
+unpaywall_failed*.txt
+papers_meta.txt
+run_summary.txt
+paperflow.db
+paperflow.db-shm
+paperflow.db-wal
+paperflow.pre-*.db
+paperflow.before-*.db.bak
+*.db.bak
+
+# 检索、导出与下载结果（数据保留在本机，不进入源码版本库）
+abstracts.txt
+summary.txt
+downloads/
+pdf_downloaded/
+scihub_downloads/
+unpaywall_downloads/
+wos_exports/
+wos_api_runs/
+input.txt
+doi_list.tsv
+cnki_ginkgo_list.txt
+
+# 系统文件
+.DS_Store
+
+# 本地工作规划（不属于发布包）
+task_plan.md
+findings.md
+progress.md

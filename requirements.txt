@@ -1,0 +1,9 @@
+requests>=2.32,<3
+pypdf>=5.0,<7
+beautifulsoup4>=4.12
+playwright>=1.40
+playwright-stealth>=2.0,<3
+lxml>=4.9
+tqdm>=4.66,<5
+urllib3>=1.26,<2
+textual>=0.89,<1
