@@ -80,6 +80,7 @@ class PdfEngine:
         partial = target.with_suffix(target.suffix + ".part")
         partial.unlink(missing_ok=True)
         last_error = ""
+        non_pdf = False
         try:
             for proxy in self.proxies:
                 try:
@@ -93,14 +94,20 @@ class PdfEngine:
                     if pdf_ok(partial):
                         partial.replace(target)
                         return True, f"直接候选 → {response.url[:120]}"
-                    # 同一 URL 经不同代理通常仍是同一 HTML 落地页，避免重复等待。
-                    return False, "候选返回内容不是 PDF"
+                    # 某个出口可能返回反爬 HTML，继续尝试后备代理。
+                    non_pdf = True
                 except requests.HTTPError as exc:
-                    return False, f"HTTPError: HTTP {exc.response.status_code if exc.response is not None else 'unknown'}"
+                    status = exc.response.status_code if exc.response is not None else "unknown"
+                    last_error = f"HTTPError: HTTP {status}"
+                    # 403/429/5xx 可能只针对当前出口，继续尝试代理池中的其他出口。
+                    continue
                 except requests.RequestException as exc:
                     last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+                    continue
                 finally:
                     partial.unlink(missing_ok=True)
+            if non_pdf:
+                return False, "候选返回内容不是 PDF"
             return False, last_error or "直接候选下载失败"
         finally:
             partial.unlink(missing_ok=True)
