@@ -84,7 +84,9 @@ class PublisherEngine:
         self.proxies = proxies or net.DEFAULT_PROXIES
         self.site = site
         from .elsevier import ElsevierEngine
+        from .springer_nature import SpringerNatureEngine
         self.elsevier = ElsevierEngine(proxies=self.proxies)
+        self.springer_nature = SpringerNatureEngine(proxies=self.proxies)
         self.session_cookie: dict[str, str] = {}
         # 自动加载浏览器授权捕获的登录态（合并所有订阅站点）
         try:
@@ -105,6 +107,10 @@ class PublisherEngine:
         prefix = doi.split("/")[0] if "/" in doi else doi
         if prefix == "10.1016" and self.elsevier.api_key:
             ok, detail = self.elsevier.fetch(doi, target)
+            if ok:
+                return ok, detail
+        if prefix in {"10.1007", "10.1186", "10.1038", "10.1057", "10.1365"} and self.springer_nature.api_key:
+            ok, detail = self.springer_nature.fetch(doi, target)
             if ok:
                 return ok, detail
         learned = load_learned()
