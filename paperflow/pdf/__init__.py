@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import os
 import shutil
+import time
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -83,29 +84,37 @@ class PdfEngine:
         non_pdf = False
         try:
             for proxy in self.proxies:
-                try:
-                    session = net.make_session(proxy, email=self.email)
-                    response = session.get(url, timeout=15, allow_redirects=True, stream=True)
-                    response.raise_for_status()
-                    with partial.open("wb") as handle:
-                        for chunk in response.iter_content(chunk_size=1024 * 128):
-                            if chunk:
-                                handle.write(chunk)
-                    if pdf_ok(partial):
-                        partial.replace(target)
-                        return True, f"直接候选 → {response.url[:120]}"
-                    # 某个出口可能返回反爬 HTML，继续尝试后备代理。
-                    non_pdf = True
-                except requests.HTTPError as exc:
-                    status = exc.response.status_code if exc.response is not None else "unknown"
-                    last_error = f"HTTPError: HTTP {status}"
-                    # 403/429/5xx 可能只针对当前出口，继续尝试代理池中的其他出口。
-                    continue
-                except requests.RequestException as exc:
-                    last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
-                    continue
-                finally:
-                    partial.unlink(missing_ok=True)
+                session = net.make_session(proxy, email=self.email)
+                # Europe PMC 偶发 500/超时；每个出口有限重试一次，避免把临时错误
+                # 永久记为失败。普通 4xx 和非 PDF 页面不在同一出口反复请求。
+                for attempt in range(2):
+                    try:
+                        response = session.get(url, timeout=15, allow_redirects=True, stream=True)
+                        response.raise_for_status()
+                        with partial.open("wb") as handle:
+                            for chunk in response.iter_content(chunk_size=1024 * 128):
+                                if chunk:
+                                    handle.write(chunk)
+                        if pdf_ok(partial):
+                            partial.replace(target)
+                            return True, f"直接候选 → {response.url[:120]}"
+                        non_pdf = True
+                        break
+                    except requests.HTTPError as exc:
+                        status = exc.response.status_code if exc.response is not None else 0
+                        last_error = f"HTTPError: HTTP {status or 'unknown'}"
+                        if attempt == 0 and (status == 429 or status >= 500):
+                            time.sleep(1)
+                            continue
+                        break
+                    except requests.RequestException as exc:
+                        last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
+                        if attempt == 0:
+                            time.sleep(1)
+                            continue
+                        break
+                    finally:
+                        partial.unlink(missing_ok=True)
             if non_pdf:
                 return False, "候选返回内容不是 PDF"
             return False, last_error or "直接候选下载失败"
