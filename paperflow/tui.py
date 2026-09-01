@@ -29,7 +29,7 @@ from textual.widgets import (
 )
 
 from .database import PaperDatabase
-from .workflows import download_database_queue, fetch_wos_to_database, search_to_database
+from .workflows import download_database_queue, fetch_wos_to_database, preflight_download_candidates, search_to_database
 
 
 class ClearDatabaseScreen(ModalScreen[bool]):
@@ -179,6 +179,7 @@ class PaperflowTui(App):
                     yield Input(value="downloads", placeholder="输出目录", id="download-out")
                     yield Input(value="100", placeholder="条数", id="download-limit", type="integer")
                     yield Input(value="60", placeholder="每分钟（推荐 60）", id="download-rpm", type="integer")
+                    yield Button("预解析下载源", id="download-preflight", variant="primary")
                 with Horizontal(classes="form-row"):
                     yield Input(placeholder="最低影响因子", id="download-min-if", type="number")
                     yield Input(placeholder="最高影响因子", id="download-max-if", type="number")
@@ -284,6 +285,8 @@ class PaperflowTui(App):
         }.get(selector)
         if button_selector:
             self.query_one(button_selector, Button).disabled = False
+        if selector == "#download-log":
+            self.query_one("#download-preflight", Button).disabled = False
         self.refresh_dashboard()
         self.refresh_library()
 
@@ -358,6 +361,13 @@ class PaperflowTui(App):
                 self._integer(self._value("#download-rpm"), 30), self._value("#download-email"),
                 self._number(self._value("#download-min-if")), self._number(self._value("#download-max-if")),
             )
+        elif button_id == "download-preflight":
+            event.button.disabled = True
+            self.query_one("#download-log", RichLog).clear()
+            self.run_preflight_worker(
+                self._value("#download-keyword"), self._value("#download-source"),
+                self._integer(self._value("#download-limit"), 100), self._value("#download-email"),
+            )
         elif button_id == "impact-import":
             path = Path(self._value("#impact-file")).expanduser()
             if not path.is_file():
@@ -398,6 +408,20 @@ class PaperflowTui(App):
             )
         except Exception as exc:
             self.call_from_thread(self._finish_task, "#download-log", f"下载失败：{exc}", "error")
+
+    @work(thread=True, exclusive=True, group="preflight")
+    def run_preflight_worker(self, keyword: str, source: str, limit: int, email: str) -> None:
+        try:
+            result = preflight_download_candidates(
+                self.db_path, email, limit, keyword, source,
+                progress=lambda message: self.call_from_thread(self._append_log, "#download-log", message),
+            )
+            self.call_from_thread(
+                self._finish_task, "#download-log",
+                f"预解析完成：发现候选 {result['with_candidates']} 篇",
+            )
+        except Exception as exc:
+            self.call_from_thread(self._finish_task, "#download-log", f"预解析失败：{exc}", "error")
 
     @work(thread=True, exclusive=True, group="wos")
     def run_wos_worker(

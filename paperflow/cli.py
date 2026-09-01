@@ -125,6 +125,15 @@ def cmd_download_db(args: argparse.Namespace) -> int:
     return 0 if result["failed"] == 0 else 3
 
 
+def cmd_download_preflight(args: argparse.Namespace) -> int:
+    from .workflows import preflight_download_candidates
+    result = preflight_download_candidates(
+        args.db, args.email, args.limit, args.keyword, args.source, progress=print
+    )
+    print(f"预解析完成：处理 {result['parsed']} 篇，发现候选 {result['with_candidates']} 篇")
+    return 0
+
+
 def cmd_impact_factor(args: argparse.Namespace) -> int:
     """导入正式 JIF 表，自动关联数据库中的历史和未来论文。"""
     from .database import PaperDatabase
@@ -436,6 +445,14 @@ def main(argv: list[str] | None = None) -> int:
     p_dd.add_argument("--rpm", type=int, default=60, help="下载限速（推荐 60，即每篇约 1 秒）")
     p_dd.add_argument("--email", default="")
     p_dd.set_defaults(fn=cmd_download_db)
+
+    p_pf = sub.add_parser("download-preflight", help="预解析 DOI 的 OA/出版社下载候选，不下载文件")
+    p_pf.add_argument("--db", type=Path, default=DEFAULT_DB)
+    p_pf.add_argument("--keyword", default="")
+    p_pf.add_argument("--source", default="")
+    p_pf.add_argument("--limit", type=int, default=100)
+    p_pf.add_argument("--email", default="")
+    p_pf.set_defaults(fn=cmd_download_preflight)
 
     p_if = sub.add_parser("impact-factor", help="导入正式 JIF CSV/TSV 并自动匹配期刊")
     p_if.add_argument("action", choices=["import"])

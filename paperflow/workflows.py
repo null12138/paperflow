@@ -193,3 +193,44 @@ def download_database_queue(
                 _emit(progress, f"[{index}/{len(papers)}] ✗ {paper.title[:60]} | {info[:120]}")
     _emit(progress, f"下载完成：成功 {ok_count}，失败 {fail_count}")
     return {"total": len(papers), "success": ok_count, "failed": fail_count}
+
+
+def preflight_download_candidates(
+    db_path: Path,
+    email: str = "",
+    limit: int = 100,
+    keyword: str = "",
+    source: str = "",
+    progress: Progress | None = None,
+) -> dict[str, int]:
+    """只解析 DOI 的 OA/出版社候选并写回 SQLite，不下载文件。"""
+    from .pdf.oa import OaEngine
+    from .pdf.publisher import publisher_of
+
+    oa = OaEngine(email=email, proxies=net.DEFAULT_PROXIES)
+    with PaperDatabase(db_path) as database:
+        papers = database.load_papers_for_download(
+            keyword=keyword, source=source, status="all", limit=limit
+        )
+        parsed = with_candidates = failed = 0
+        for index, paper in enumerate(papers, 1):
+            if not paper.doi:
+                _emit(progress, f"[{index}/{len(papers)}] 跳过（无 DOI）：{paper.title[:60]}")
+                continue
+            parsed += 1
+            before = len(paper.pdf_candidates)
+            try:
+                for url in oa._candidates_for_doi(paper.doi):
+                    paper.add_candidate(url, "oa", priority=2)
+                meta = publisher_of(paper.doi)
+                if meta:
+                    paper.add_candidate(meta[1], "publisher", priority=4)
+                if len(paper.pdf_candidates) > before:
+                    with_candidates += 1
+                database.save_papers([paper])
+                _emit(progress, f"[{index}/{len(papers)}] ✓ {paper.title[:60]}：新增 {len(paper.pdf_candidates)-before} 个候选")
+            except Exception as exc:
+                failed += 1
+                _emit(progress, f"[{index}/{len(papers)}] ✗ {paper.title[:60]}：{type(exc).__name__}")
+    _emit(progress, f"预解析完成：处理 {parsed} 篇，发现候选 {with_candidates} 篇，失败 {failed} 篇")
+    return {"total": len(papers), "parsed": parsed, "with_candidates": with_candidates, "failed": failed}

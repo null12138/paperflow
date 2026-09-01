@@ -169,6 +169,9 @@ paperflow db list --min-if 5 --max-if 10 --limit 100
 
 # 只下载影响因子不低于 5 的未尝试论文
 paperflow download-db --status pending --min-if 5 --out downloads
+
+# 先只预解析 DOI 的 OA/出版社候选，不下载文件
+paperflow download-preflight --db paperflow.db --limit 100
 ```
 
 结果始终同时保存影响因子数值、年份和数据来源；未精确匹配的期刊显示 `-`，不会猜测。
