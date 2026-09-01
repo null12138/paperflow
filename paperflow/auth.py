@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -80,7 +81,11 @@ def apply_cookies(session, cookies: list[dict]) -> None:
 
 
 def _launch_browser(headful: bool):
-    """启动真实指纹浏览器：优先系统 Chrome（channel=chrome）+ stealth 反检测。"""
+    """启动本机 Chromium 系浏览器。
+
+    可通过 ``PAPERFLOW_BROWSER_CHANNEL=msedge`` 选择已安装的 Microsoft Edge
+    进行兼容性测试；这不绕过验证码，验证仍需用户手动完成。
+    """
     from playwright.sync_api import sync_playwright
     from playwright_stealth import Stealth
 
@@ -92,9 +97,10 @@ def _launch_browser(headful: bool):
             "--no-first-run", "--no-default-browser-check",
         ],
     }
+    channel = os.getenv("PAPERFLOW_BROWSER_CHANNEL", "chrome").strip() or "chrome"
     try:
         p = sync_playwright().start()
-        browser = p.chromium.launch(channel="chrome", **launch_kwargs)  # 系统 Chrome
+        browser = p.chromium.launch(channel=channel, **launch_kwargs)  # 系统浏览器
     except Exception:
         p.stop()
         p = sync_playwright().start()
