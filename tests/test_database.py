@@ -9,6 +9,13 @@ from paperflow.pdf import PdfEngine, safe_slug
 
 
 class DatabaseTests(unittest.TestCase):
+    def test_zero_limit_returns_all_papers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with PaperDatabase(Path(directory) / "papers.db") as database:
+                database.save_papers([Paper(title=f"Paper {index}") for index in range(1005)])
+                self.assertEqual(len(database.list_papers(limit=0)), 1005)
+                self.assertEqual(len(database.load_papers_for_download(limit=0, status="all")), 1005)
+
     def test_clear_all_removes_business_data_and_keeps_schema(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "papers.db"

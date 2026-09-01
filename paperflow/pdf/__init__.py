@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import os
+import shutil
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
@@ -38,6 +40,7 @@ class PdfEngine:
         use_oa: bool = True,
         use_publisher: bool = False,
         use_cnki: bool = False,
+        use_direct_candidates: bool | None = None,
     ) -> None:
         self.out = Path(out_dir)
         self.out.mkdir(parents=True, exist_ok=True)
@@ -47,7 +50,7 @@ class PdfEngine:
         self.cookie_file = cookie_file
         self.scihub = SciHubEngine(proxies=self.proxies, cookie_file=cookie_file) if use_scihub else None
         self.oa = OaEngine(email=email, proxies=self.proxies) if use_oa else None
-        self.use_direct_candidates = use_oa
+        self.use_direct_candidates = use_oa if use_direct_candidates is None else use_direct_candidates
         self.publisher = PublisherEngine(proxies=self.proxies) if use_publisher else None
         if use_cnki:
             from .cnki import CnkiPdfEngine
@@ -62,6 +65,16 @@ class PdfEngine:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             return False, "候选 URL 不是有效的 HTTP(S) 地址"
+        if parsed.hostname.casefold() in {"doi.org", "dx.doi.org", "linkinghub.elsevier.com"}:
+            return False, "候选是 DOI 落地页，不是直接 PDF"
+        hostname = parsed.hostname.casefold()
+        if hostname in {"www.mdpi.com", "mdpi.com"} and not parsed.path.rstrip("/").endswith("/pdf"):
+            parsed = parsed._replace(path=parsed.path.rstrip("/") + "/pdf")
+            url = urlunparse(parsed)
+        if hostname == "pmc.ncbi.nlm.nih.gov":
+            match = re.search(r"/articles/(PMC)?(\d+)", parsed.path, flags=re.I)
+            if match:
+                url = f"https://europepmc.org/articles/PMC{match.group(2)}?pdf=render"
         partial = target.with_suffix(target.suffix + ".part")
         partial.unlink(missing_ok=True)
         last_error = ""
@@ -78,7 +91,10 @@ class PdfEngine:
                     if pdf_ok(partial):
                         partial.replace(target)
                         return True, f"直接候选 → {response.url[:120]}"
-                    last_error = "候选返回内容不是 PDF"
+                    # 同一 URL 经不同代理通常仍是同一 HTML 落地页，避免重复等待。
+                    return False, "候选返回内容不是 PDF"
+                except requests.HTTPError as exc:
+                    return False, f"HTTPError: HTTP {exc.response.status_code if exc.response is not None else 'unknown'}"
                 except requests.RequestException as exc:
                     last_error = f"{type(exc).__name__}: {str(exc)[:120]}"
                 finally:
@@ -89,6 +105,14 @@ class PdfEngine:
 
     def fetch(self, paper: Paper) -> tuple[bool, str]:
         """下载单篇论文全文；返回 (成功?, 说明)。"""
+        try:
+            minimum_free = max(0.5, float(os.getenv("PAPERFLOW_MIN_FREE_GB", "3")))
+        except ValueError:
+            minimum_free = 3.0
+        if shutil.disk_usage(self.out).free < minimum_free * 1024 ** 3:
+            paper.failure_reason = f"磁盘剩余空间不足 {minimum_free:g} GB，已停止写入"
+            paper.download_detail = paper.failure_reason
+            return False, paper.failure_reason
         target = self._target_path(paper)
         if pdf_ok(target):
             paper.downloaded_path = str(target)
@@ -102,7 +126,9 @@ class PdfEngine:
         if self.use_direct_candidates:
             for candidate in paper.pdf_candidates:
                 name = candidate.source.casefold()
-                if name != "cnki":
+                # publisher 候选通常是落地页/付费端点，需要 PublisherEngine
+                # 注入 API Key 或机构会话，不能作为普通 OA URL 直接抓取。
+                if name not in {"cnki", "publisher"}:
                     strategies.append((name, lambda url=candidate.url: self._fetch_direct_candidate(url, target)))
         # 既有三种策略都以 DOI 为入口；无 DOI 的 CNKI 论文不应向它们传空字符串。
         if paper.doi:

@@ -402,6 +402,31 @@ def cmd_db(args: argparse.Namespace) -> int:
                 f"{'将移除' if args.dry_run else '已移除'} {result['removed']} 条，"
                 f"因标识冲突跳过 {result['skipped_conflicts']} 组；数据库: {args.db}"
             )
+        elif args.action == "reconcile-pdfs":
+            from .workflows import reconcile_existing_pdfs
+            directories = args.scan_dir or [
+                Path("downloads"), Path("unpaywall_downloads"),
+                Path("scihub_downloads"), Path("pdf_downloaded"),
+            ]
+            result = reconcile_existing_pdfs(
+                args.db, directories, args.pdf_dir, progress=print
+            )
+            print(
+                f"整理完成：扫描 {result['files']}，匹配 {result['matched']}，"
+                f"复制 {result['copied']}，歧义 {result['ambiguous']}"
+            )
+        elif args.action == "export-report":
+            papers = database.load_papers_for_download(status="", limit=0)
+            from .pdf import pdf_ok
+            for paper in papers:
+                if paper.downloaded_path and not pdf_ok(Path(paper.downloaded_path)):
+                    paper.downloaded_path = ""
+                    paper.failure_reason = paper.failure_reason or "数据库中的 PDF 文件已不存在"
+                elif not paper.downloaded_path:
+                    paper.failure_reason = paper.failure_reason or "未找到合法可直接下载的 PDF"
+            _write_abstracts(papers, args.abstracts)
+            _write_summary(papers, args.summary)
+            print(f"导出完成：{len(papers)} 篇 → {args.abstracts} / {args.summary}")
     return 0
 
 
@@ -434,11 +459,11 @@ def main(argv: list[str] | None = None) -> int:
     p_dd = sub.add_parser("download-db", help="从 SQLite 队列独立下载（与检索完全解耦）")
     p_dd.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径")
     p_dd.add_argument("--out", type=Path, default=Path("downloads"))
-    p_dd.add_argument("--mode", default="cnki+scihub+oa", help="可组合: cnki, scihub, oa, publisher")
+    p_dd.add_argument("--mode", default="cnki+scihub+oa", help="可组合: direct, cnki, scihub, oa, publisher")
     p_dd.add_argument("--keyword", default="", help="只下载指定检索关键词")
     p_dd.add_argument("--source", default="", help="只下载指定元数据来源，如 CNKI")
-    p_dd.add_argument("--status", choices=["pending", "failed", "all"], default="pending",
-                      help="pending=未尝试，failed=重试失败项，all=全部未下载")
+    p_dd.add_argument("--status", choices=["pending", "failed", "all", "candidate", "candidate-pending", "candidate-pmc-pending"], default="pending",
+                      help="pending=未尝试，failed=重试失败项，candidate=已有候选，candidate-pending=候选且未尝试，candidate-pmc-pending=PMC候选且未尝试，all=全部未下载")
     p_dd.add_argument("--min-if", type=float, default=None, help="最低影响因子（需先导入 JIF）")
     p_dd.add_argument("--max-if", type=float, default=None, help="最高影响因子（需先导入 JIF）")
     p_dd.add_argument("--limit", type=int, default=100)
@@ -520,7 +545,9 @@ def main(argv: list[str] | None = None) -> int:
     p_dr.set_defaults(fn=cmd_doctor)
 
     p_db = sub.add_parser("db", help="SQLite 数据库统计、查询与旧数据迁移")
-    p_db.add_argument("action", choices=["stats", "list", "import-legacy", "dedupe"])
+    p_db.add_argument("action", choices=[
+        "stats", "list", "import-legacy", "dedupe", "reconcile-pdfs", "export-report"
+    ])
     p_db.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径")
     p_db.add_argument("--keyword", default="", help="list 时按关键词过滤")
     p_db.add_argument("--source", default="", help="list 时按元数据来源过滤")
@@ -531,6 +558,8 @@ def main(argv: list[str] | None = None) -> int:
     p_db.add_argument("--limit", type=int, default=20, help="list 最多显示条数")
     p_db.add_argument("--abstracts", type=Path, default=Path("abstracts.txt"))
     p_db.add_argument("--summary", type=Path, default=Path("summary.txt"))
+    p_db.add_argument("--scan-dir", type=Path, action="append", default=[], help="reconcile-pdfs 扫描目录（可多次）")
+    p_db.add_argument("--pdf-dir", type=Path, default=Path("pdf_downloaded"), help="整理后的 PDF 目录")
     p_db.add_argument("--dry-run", action="store_true", help="dedupe 时仅预览，不修改数据库")
     p_db.set_defaults(fn=cmd_db)
 

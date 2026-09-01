@@ -171,7 +171,7 @@ class PaperflowTui(App):
                     yield Input(placeholder="关键词（可空）", id="download-keyword")
                     yield Input(placeholder="元数据来源（可空，如 WOS/CNKI）", id="download-source")
                     yield Select(
-                        [("未尝试", "pending"), ("重试失败", "failed"), ("全部未下载", "all")],
+                        [("未尝试", "pending"), ("PMC候选优先", "candidate-pmc-pending"), ("候选且未尝试", "candidate-pending"), ("已有候选", "candidate"), ("重试失败", "failed"), ("全部未下载", "all")],
                         value="pending", id="download-status",
                     )
                 with Horizontal(classes="form-row"):

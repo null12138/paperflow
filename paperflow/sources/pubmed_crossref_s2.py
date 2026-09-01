@@ -77,25 +77,38 @@ class EuropePmcSource:
     name = "Europe PMC"
 
     def search_species(self, client, species: str, limit: int) -> list[Paper]:
-        payload = client.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
-            params={"query": f'"{species}" OPEN_ACCESS:Y', "format": "json",
-                    "pageSize": min(limit, 100) if limit > 0 else 100, "resultType": "core"},
-        ).json()
         papers = []
-        for item in payload.get("resultList", {}).get("result", []):
-            pmcid = clean_text(item.get("pmcid"))
-            authors = [a.get("fullName", "") for a in (item.get("authorList") or {}).get("author", [])]
-            paper = Paper(
-                title=clean_text(item.get("title")), abstract=clean_text(item.get("abstractText")),
-                year=clean_text(item.get("pubYear")), journal=clean_text(item.get("journalTitle")),
-                authors=author_names(authors), doi=normalize_doi(item.get("doi", "")),
-                pmid=clean_text(item.get("pmid")), pmcid=pmcid, sources={"Europe PMC"},
-                species={species},
-            )
-            if pmcid and item.get("isOpenAccess") == "Y":
-                paper.add_candidate(f"https://europepmc.org/articles/{pmcid}?pdf=render", "europepmc", priority=2)
-            papers.append(paper)
+        cursor = "*"
+        while True:
+            remaining = limit - len(papers) if limit > 0 else 1000
+            page_size = min(max(remaining, 1), 1000)
+            payload = client.get(
+                "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+                params={"query": f'"{species}" OPEN_ACCESS:Y', "format": "json",
+                        "pageSize": page_size, "resultType": "core", "cursorMark": cursor},
+            ).json()
+            items = payload.get("resultList", {}).get("result", [])
+            for item in items:
+                pmcid = clean_text(item.get("pmcid"))
+                authors = [a.get("fullName", "") for a in (item.get("authorList") or {}).get("author", [])]
+                paper = Paper(
+                    title=clean_text(item.get("title")), abstract=clean_text(item.get("abstractText")),
+                    year=clean_text(item.get("pubYear")), journal=clean_text(item.get("journalTitle")),
+                    authors=author_names(authors), doi=normalize_doi(item.get("doi", "")),
+                    pmid=clean_text(item.get("pmid")), pmcid=pmcid, sources={"Europe PMC"},
+                    species={species},
+                )
+                if pmcid and item.get("isOpenAccess") == "Y":
+                    paper.add_candidate(f"https://europepmc.org/articles/{pmcid}?pdf=render", "europepmc", priority=1)
+                papers.append(paper)
+                if limit > 0 and len(papers) >= limit:
+                    break
+            if (limit > 0 and len(papers) >= limit) or not items:
+                break
+            next_cursor = payload.get("nextCursorMark")
+            if not next_cursor or next_cursor == cursor:
+                break
+            cursor = next_cursor
         return papers
 
     def search_doi(self, client, doi: str) -> list[Paper]:

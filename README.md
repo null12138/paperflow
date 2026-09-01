@@ -181,6 +181,23 @@ paperflow download-db --status pending --min-if 5 --out downloads
 paperflow download-preflight --db paperflow.db --limit 100
 ```
 
+`--limit 0` 表示处理全部未下载论文。预解析优先批量查询 OpenAlex；若当前出口被 429 限流且配置了 `S2_API_KEY`，会自动使用 Semantic Scholar batch API 补齐摘要、OA PDF 和 PMC 候选。
+
+只下载已经预解析出的合法候选（不再次逐 DOI 查询）：
+
+```bash
+paperflow download-db --db paperflow.db --out pdf_downloaded \
+  --mode direct --status candidate --limit 0 --rpm 600
+```
+
+整理旧目录中的有效 PDF 并回写 SQLite，然后重新生成交付文件：
+
+```bash
+paperflow db reconcile-pdfs --db paperflow.db --pdf-dir pdf_downloaded
+paperflow db export-report --db paperflow.db \
+  --abstracts abstracts.txt --summary summary.txt
+```
+
 结果始终同时保存影响因子数值、年份和数据来源；未精确匹配的期刊显示 `-`，不会猜测。
 
 ### 6. 全流程（检索 → 下载）

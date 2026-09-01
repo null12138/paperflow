@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -10,7 +12,7 @@ from typing import Callable, Iterable
 
 from . import net
 from .database import PaperDatabase
-from .models import Paper, add_paper, clean_text, unique_papers
+from .models import Paper, add_paper, clean_text, normalize_title, unique_papers
 from .sources import SOURCES
 
 
@@ -170,6 +172,7 @@ def download_database_queue(
         use_oa="oa" in mode,
         use_publisher="publisher" in mode,
         use_cnki="cnki" in mode,
+        use_direct_candidates="direct" in mode or "oa" in mode,
     )
     with PaperDatabase(db_path) as database:
         papers = database.load_papers_for_download(
@@ -182,15 +185,25 @@ def download_database_queue(
         )
         _emit(progress, f"数据库下载队列：{len(papers)} 篇")
         ok_count = fail_count = 0
-        for index, paper in enumerate(papers, 1):
+        tokens = {part.strip() for part in mode.replace("+", ",").split(",") if part.strip()}
+        # Europe PMC 对过高并发会显著变慢甚至超时；8 路实测吞吐更稳定。
+        workers = 8 if tokens and tokens <= {"direct", "oa"} else 1
+
+        def fetch_one(paper: Paper):
             ok, info = engine.fetch(paper)
-            database.save_download(paper, ok, info)
-            if ok:
-                ok_count += 1
-                _emit(progress, f"[{index}/{len(papers)}] ✓ {paper.title[:60]} | {info[:100]}")
-            else:
-                fail_count += 1
-                _emit(progress, f"[{index}/{len(papers)}] ✗ {paper.title[:60]} | {info[:120]}")
+            return paper, ok, info
+
+        with ThreadPoolExecutor(max_workers=min(workers, max(1, len(papers)))) as pool:
+            futures = [pool.submit(fetch_one, paper) for paper in papers]
+            for index, future in enumerate(as_completed(futures), 1):
+                paper, ok, info = future.result()
+                database.save_download(paper, ok, info)
+                if ok:
+                    ok_count += 1
+                    _emit(progress, f"[{index}/{len(papers)}] ✓ {paper.title[:60]} | {info[:100]}")
+                else:
+                    fail_count += 1
+                    _emit(progress, f"[{index}/{len(papers)}] ✗ {paper.title[:60]} | {info[:120]}")
     _emit(progress, f"下载完成：成功 {ok_count}，失败 {fail_count}")
     return {"total": len(papers), "success": ok_count, "failed": fail_count}
 
@@ -203,50 +216,136 @@ def preflight_download_candidates(
     source: str = "",
     progress: Progress | None = None,
 ) -> dict[str, int]:
-    """只解析 DOI 的 OA/出版社候选并写回 SQLite，不下载文件。"""
+    """批量解析 DOI 的 OpenAlex OA 候选和摘要并写回 SQLite，不下载文件。"""
     from .pdf.oa import OaEngine
-    from .pdf.publisher import publisher_of
 
     oa = OaEngine(email=email, proxies=net.DEFAULT_PROXIES)
     with PaperDatabase(db_path) as database:
         papers = database.load_papers_for_download(
             keyword=keyword, source=source, status="all", limit=limit
         )
-        parsed = with_candidates = failed = 0
-
-        def resolve(paper):
-            before = len(paper.pdf_candidates)
-            reason = ""
-            if not paper.doi:
-                return paper, before, "无 DOI"
+        doi_papers = [paper for paper in papers if paper.doi]
+        parsed = with_candidates = failed = enriched_abstracts = 0
+        openalex_available = True
+        if doi_papers:
             try:
-                for url in oa._candidates_for_doi(paper.doi):
-                    paper.add_candidate(url, "oa", priority=2)
-                meta = publisher_of(paper.doi)
-                if meta:
-                    paper.add_candidate(meta[1], "publisher", priority=4)
-                added = len(paper.pdf_candidates) - before
-                reason = f"新增 {added} 个候选" if added else "未发现 OA 或出版社候选"
-                return paper, before, reason
-            except Exception as exc:
-                return paper, before, f"解析失败（{type(exc).__name__}）"
+                oa.bulk_openalex([doi_papers[0].doi])
+            except Exception:
+                openalex_available = False
+        provider = "openalex" if openalex_available else ("s2" if oa.s2_api_key else "unpaywall")
+        batch_size = 20 if provider != "s2" else 100
+        batches = [doi_papers[i:i + batch_size] for i in range(0, len(doi_papers), batch_size)]
+        if not openalex_available:
+            _emit(progress, f"OpenAlex 当前限流，自动切换 {provider} 批量解析")
 
-        # 受控并行：OA 元数据查询是网络瓶颈，但不无限并发以免触发服务限流。
-        with ThreadPoolExecutor(max_workers=min(4, max(1, len(papers)))) as pool:
-            futures = [pool.submit(resolve, paper) for paper in papers]
-            for index, future in enumerate(futures, 1):
-                paper, before, reason = future.result()
-                if not paper.doi:
-                    _emit(progress, f"[{index}/{len(papers)}] 跳过（{reason}）：{paper.title[:60]}")
+        def resolve_batch(batch: list[Paper]):
+            if provider == "openalex":
+                try:
+                    return batch, oa.bulk_openalex(paper.doi for paper in batch), "openalex"
+                except Exception:
+                    pass
+            if provider == "s2":
+                try:
+                    return batch, oa.bulk_s2(paper.doi for paper in batch), "s2"
+                except Exception:
+                    pass
+            # OpenAlex 匿名出口可能 429；逐 DOI 使用 Unpaywall 合法 OA 数据回退。
+            resolved = {}
+            for paper in batch:
+                urls = oa._unpaywall_candidates(paper.doi)
+                resolved[paper.doi.lower()] = {"abstract": "", "candidates": urls}
+            return batch, resolved, "unpaywall"
+
+        # 每个请求包含最多 20 个 DOI；4 路受控并发比逐 DOI 请求快一个数量级。
+        workers = 1 if provider == "s2" else min(4, max(1, len(batches)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(resolve_batch, batch): batch for batch in batches}
+            for batch_index, future in enumerate(as_completed(futures), 1):
+                try:
+                    batch, resolved, provider = future.result()
+                except Exception as exc:
+                    batch = futures[future]
+                    failed += len(batch)
+                    _emit(progress, f"[{batch_index}/{len(batches)}] ✗ OpenAlex 批次失败：{type(exc).__name__}")
                     continue
-                parsed += 1
-                added = len(paper.pdf_candidates) - before
-                if reason.startswith("解析失败"):
-                    failed += 1
-                elif added:
-                    with_candidates += 1
-                database.save_papers([paper])
-                mark = "✓" if added else "-"
-                _emit(progress, f"[{index}/{len(papers)}] {mark} {paper.title[:60]}：{reason}")
+                for paper in batch:
+                    parsed += 1
+                    before = len(paper.pdf_candidates)
+                    item = resolved.get(paper.doi.lower()) or {}
+                    abstract = clean_text(item.get("abstract"))
+                    if abstract and len(abstract) > len(paper.abstract):
+                        paper.abstract = abstract
+                        enriched_abstracts += 1
+                    for url in item.get("candidates") or []:
+                        lowered = url.casefold()
+                        priority = 1 if any(token in lowered for token in (
+                            "pmc.ncbi.nlm.nih.gov", "europepmc.org", ".pdf", "type=printable"
+                        )) else (5 if "doi.org/" in lowered else 2)
+                        paper.add_candidate(url, provider, priority=priority)
+                    if len(paper.pdf_candidates) > before:
+                        with_candidates += 1
+                database.save_papers(batch)
+                _emit(
+                    progress,
+                    f"[{batch_index}/{len(batches)}] ✓ {provider} 解析 {len(batch)} 篇；"
+                    f"累计候选 {with_candidates}，补摘要 {enriched_abstracts}",
+                )
     _emit(progress, f"预解析完成：处理 {parsed} 篇，发现候选 {with_candidates} 篇，失败 {failed} 篇")
-    return {"total": len(papers), "parsed": parsed, "with_candidates": with_candidates, "failed": failed}
+    return {
+        "total": len(papers), "parsed": parsed, "with_candidates": with_candidates,
+        "failed": failed, "enriched_abstracts": enriched_abstracts,
+    }
+
+
+def reconcile_existing_pdfs(
+    db_path: Path,
+    scan_dirs: Iterable[Path],
+    target_dir: Path = Path("pdf_downloaded"),
+    progress: Progress | None = None,
+) -> dict[str, int]:
+    """把旧目录中的有效 PDF 按长题名前缀匹配数据库，集中复制并回写路径。"""
+    from .pdf import pdf_ok
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    files: list[Path] = []
+    seen_paths: set[Path] = set()
+    for directory in scan_dirs:
+        directory = Path(directory)
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*.pdf"):
+            resolved = path.resolve()
+            if resolved not in seen_paths and pdf_ok(path):
+                seen_paths.add(resolved)
+                files.append(path)
+
+    matched = copied = ambiguous = 0
+    with PaperDatabase(db_path) as database:
+        papers = database.load_papers_for_download(status="", limit=0)
+        normalized = [(paper, normalize_title(paper.title)) for paper in papers]
+        for index, source in enumerate(files, 1):
+            stem = re.sub(r"_[0-9a-f]{8}$", "", source.stem, flags=re.I)
+            key = normalize_title(stem)
+            if len(key) < 20:
+                continue
+            matches = [paper for paper, title_key in normalized if title_key == key or title_key.startswith(key)]
+            if len(matches) != 1:
+                ambiguous += int(len(matches) > 1)
+                continue
+            paper = matches[0]
+            destination = target_dir / source.name
+            if destination.resolve() != source.resolve() and not destination.exists():
+                shutil.copy2(source, destination)
+                copied += 1
+            if not pdf_ok(destination):
+                continue
+            paper.downloaded_path = str(destination)
+            paper.download_source = paper.download_source or "existing"
+            paper.download_detail = paper.download_detail or f"从旧目录整理：{source.parent}"
+            paper.failure_reason = ""
+            database.save_papers([paper])
+            matched += 1
+            if index % 100 == 0:
+                _emit(progress, f"已扫描 {index}/{len(files)} 个 PDF，匹配 {matched}")
+    _emit(progress, f"PDF 整理完成：有效文件 {len(files)}，匹配 {matched}，复制 {copied}，歧义 {ambiguous}")
+    return {"files": len(files), "matched": matched, "copied": copied, "ambiguous": ambiguous}

@@ -388,6 +388,26 @@ class PaperDatabase:
             conditions.append("p.pdf_path = ''")
         elif status == "downloaded":
             conditions.append("p.pdf_path <> ''")
+        elif status == "candidate":
+            conditions.extend((
+                "p.pdf_path = ''",
+                "EXISTS (SELECT 1 FROM pdf_candidates pc WHERE pc.paper_id = p.id "
+                "AND lower(pc.source) NOT IN ('publisher', 'cnki'))",
+            ))
+        elif status == "candidate-pending":
+            conditions.extend((
+                "p.pdf_path = ''",
+                "EXISTS (SELECT 1 FROM pdf_candidates pc WHERE pc.paper_id = p.id "
+                "AND lower(pc.source) NOT IN ('publisher', 'cnki'))",
+                "NOT EXISTS (SELECT 1 FROM download_attempts da WHERE da.paper_id = p.id)",
+            ))
+        elif status == "candidate-pmc-pending":
+            conditions.extend((
+                "p.pdf_path = ''",
+                "EXISTS (SELECT 1 FROM pdf_candidates pc WHERE pc.paper_id = p.id AND "
+                "(lower(pc.url) LIKE '%europepmc.org%' OR lower(pc.url) LIKE '%pmc.ncbi.nlm.nih.gov%'))",
+                "NOT EXISTS (SELECT 1 FROM download_attempts da WHERE da.paper_id = p.id)",
+            ))
         if min_if is not None:
             conditions.append("jm.impact_factor >= ?")
             params.append(float(min_if))
@@ -395,7 +415,8 @@ class PaperDatabase:
             conditions.append("jm.impact_factor <= ?")
             params.append(float(max_if))
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
-        params.append(max(1, min(limit, 1000)))
+        # 0 表示不设本地上限；SQLite 的 LIMIT -1 会返回全部结果。
+        params.append(-1 if limit == 0 else max(1, int(limit)))
         return self.connection.execute(
             f"""SELECT p.*,
                        GROUP_CONCAT(DISTINCT s.name) AS sources,
