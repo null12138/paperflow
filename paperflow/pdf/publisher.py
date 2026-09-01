@@ -83,6 +83,8 @@ class PublisherEngine:
     def __init__(self, proxies: list[str | None] | None = None, site: str = "publisher") -> None:
         self.proxies = proxies or net.DEFAULT_PROXIES
         self.site = site
+        from .elsevier import ElsevierEngine
+        self.elsevier = ElsevierEngine(proxies=self.proxies)
         self.session_cookie: dict[str, str] = {}
         # 自动加载浏览器授权捕获的登录态（合并所有订阅站点）
         try:
@@ -101,6 +103,10 @@ class PublisherEngine:
 
         meta = publisher_of(doi)  # 注意: 内部 _sciencedirect_url 会请求 doi.org 解析 pii
         prefix = doi.split("/")[0] if "/" in doi else doi
+        if prefix == "10.1016" and self.elsevier.api_key:
+            ok, detail = self.elsevier.fetch(doi, target)
+            if ok:
+                return ok, detail
         learned = load_learned()
         candidates: list[tuple[str, str]] = []
         if meta:

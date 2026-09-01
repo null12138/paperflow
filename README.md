@@ -50,11 +50,15 @@ export UNPAYWALL_EMAIL='你的真实邮箱'   # Unpaywall/NCBI 要求
 export NCBI_EMAIL='你的真实邮箱'
 export WOS_API_KEY='...'               # WOS 官方 Starter API；只写入本机 .env
 export S2_API_KEY='...'                # 可提高 Semantic Scholar 配额
+export ELSEVIER_API_KEY='...'          # Elsevier Article Retrieval API（需相应访问权限）
+export ELSEVIER_INSTTOKEN='...'        # 可选：机构令牌
 ```
 
 S2 未配置 Key 时使用匿名配额，触发 HTTP 429 属于接口限流，不会影响其他数据源；在 `.env` 配置个人 `S2_API_KEY` 后重新检索即可。界面会显示简短的中文提示，不会输出完整请求 URL。
 
 Semantic Scholar 请求在适配器内部统一限制为每秒最多 1 次，即使多个关键词并行检索也不会突破该频率。
+
+ScienceDirect/Elsevier 下载：启用 `publisher` 通道后，DOI 为 `10.1016/...` 的文章会优先调用 Elsevier Article Retrieval API，并校验返回的 PDF 文件头；API 返回权限错误或非 PDF 时自动回退到出版社页面解析。API Key 不绕过机构订阅或反机器人验证。
 
 ## 使用
 
