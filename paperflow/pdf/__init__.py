@@ -41,6 +41,7 @@ class PdfEngine:
         use_publisher: bool = False,
         use_cnki: bool = False,
         use_direct_candidates: bool | None = None,
+        pmc_only: bool = False,
     ) -> None:
         self.out = Path(out_dir)
         self.out.mkdir(parents=True, exist_ok=True)
@@ -51,6 +52,7 @@ class PdfEngine:
         self.scihub = SciHubEngine(proxies=self.proxies, cookie_file=cookie_file) if use_scihub else None
         self.oa = OaEngine(email=email, proxies=self.proxies) if use_oa else None
         self.use_direct_candidates = use_oa if use_direct_candidates is None else use_direct_candidates
+        self.pmc_only = pmc_only
         self.publisher = PublisherEngine(proxies=self.proxies) if use_publisher else None
         if use_cnki:
             from .cnki import CnkiPdfEngine
@@ -82,7 +84,7 @@ class PdfEngine:
             for proxy in self.proxies:
                 try:
                     session = net.make_session(proxy, email=self.email)
-                    response = session.get(url, timeout=30, allow_redirects=True, stream=True)
+                    response = session.get(url, timeout=15, allow_redirects=True, stream=True)
                     response.raise_for_status()
                     with partial.open("wb") as handle:
                         for chunk in response.iter_content(chunk_size=1024 * 128):
@@ -126,6 +128,11 @@ class PdfEngine:
         if self.use_direct_candidates:
             for candidate in paper.pdf_candidates:
                 name = candidate.source.casefold()
+                lowered_url = candidate.url.casefold()
+                if self.pmc_only and not any(host in lowered_url for host in (
+                    "europepmc.org", "pmc.ncbi.nlm.nih.gov"
+                )):
+                    continue
                 # publisher 候选通常是落地页/付费端点，需要 PublisherEngine
                 # 注入 API Key 或机构会话，不能作为普通 OA URL 直接抓取。
                 if name not in {"cnki", "publisher"}:

@@ -459,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
     p_dd = sub.add_parser("download-db", help="从 SQLite 队列独立下载（与检索完全解耦）")
     p_dd.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径")
     p_dd.add_argument("--out", type=Path, default=Path("downloads"))
-    p_dd.add_argument("--mode", default="cnki+scihub+oa", help="可组合: direct, cnki, scihub, oa, publisher")
+    p_dd.add_argument("--mode", default="cnki+scihub+oa", help="可组合: direct, pmc, cnki, scihub, oa, publisher；direct+pmc 表示只试 PMC")
     p_dd.add_argument("--keyword", default="", help="只下载指定检索关键词")
     p_dd.add_argument("--source", default="", help="只下载指定元数据来源，如 CNKI")
     p_dd.add_argument("--status", choices=["pending", "failed", "all", "candidate", "candidate-pending", "candidate-pmc-pending"], default="pending",

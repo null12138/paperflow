@@ -173,6 +173,7 @@ def download_database_queue(
         use_publisher="publisher" in mode,
         use_cnki="cnki" in mode,
         use_direct_candidates="direct" in mode or "oa" in mode,
+        pmc_only="pmc" in mode,
     )
     with PaperDatabase(db_path) as database:
         papers = database.load_papers_for_download(
@@ -187,7 +188,7 @@ def download_database_queue(
         ok_count = fail_count = 0
         tokens = {part.strip() for part in mode.replace("+", ",").split(",") if part.strip()}
         # Europe PMC 对过高并发会显著变慢甚至超时；8 路实测吞吐更稳定。
-        workers = 8 if tokens and tokens <= {"direct", "oa"} else 1
+        workers = 8 if tokens and tokens <= {"direct", "oa", "pmc"} else 1
 
         def fetch_one(paper: Paper):
             ok, info = engine.fetch(paper)
