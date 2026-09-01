@@ -213,24 +213,40 @@ def preflight_download_candidates(
             keyword=keyword, source=source, status="all", limit=limit
         )
         parsed = with_candidates = failed = 0
-        for index, paper in enumerate(papers, 1):
-            if not paper.doi:
-                _emit(progress, f"[{index}/{len(papers)}] 跳过（无 DOI）：{paper.title[:60]}")
-                continue
-            parsed += 1
+
+        def resolve(paper):
             before = len(paper.pdf_candidates)
+            reason = ""
+            if not paper.doi:
+                return paper, before, "无 DOI"
             try:
                 for url in oa._candidates_for_doi(paper.doi):
                     paper.add_candidate(url, "oa", priority=2)
                 meta = publisher_of(paper.doi)
                 if meta:
                     paper.add_candidate(meta[1], "publisher", priority=4)
-                if len(paper.pdf_candidates) > before:
+                added = len(paper.pdf_candidates) - before
+                reason = f"新增 {added} 个候选" if added else "未发现 OA 或出版社候选"
+                return paper, before, reason
+            except Exception as exc:
+                return paper, before, f"解析失败（{type(exc).__name__}）"
+
+        # 受控并行：OA 元数据查询是网络瓶颈，但不无限并发以免触发服务限流。
+        with ThreadPoolExecutor(max_workers=min(4, max(1, len(papers)))) as pool:
+            futures = [pool.submit(resolve, paper) for paper in papers]
+            for index, future in enumerate(futures, 1):
+                paper, before, reason = future.result()
+                if not paper.doi:
+                    _emit(progress, f"[{index}/{len(papers)}] 跳过（{reason}）：{paper.title[:60]}")
+                    continue
+                parsed += 1
+                added = len(paper.pdf_candidates) - before
+                if reason.startswith("解析失败"):
+                    failed += 1
+                elif added:
                     with_candidates += 1
                 database.save_papers([paper])
-                _emit(progress, f"[{index}/{len(papers)}] ✓ {paper.title[:60]}：新增 {len(paper.pdf_candidates)-before} 个候选")
-            except Exception as exc:
-                failed += 1
-                _emit(progress, f"[{index}/{len(papers)}] ✗ {paper.title[:60]}：{type(exc).__name__}")
+                mark = "✓" if added else "-"
+                _emit(progress, f"[{index}/{len(papers)}] {mark} {paper.title[:60]}：{reason}")
     _emit(progress, f"预解析完成：处理 {parsed} 篇，发现候选 {with_candidates} 篇，失败 {failed} 篇")
     return {"total": len(papers), "parsed": parsed, "with_candidates": with_candidates, "failed": failed}
