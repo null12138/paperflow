@@ -49,7 +49,7 @@ def author_names(items: Iterable[Any]) -> list[str]:
 @dataclass
 class PdfCandidate:
     url: str
-    source: str  # scihub / unpaywall / pmc / europepmc / publisher / local
+    source: str  # scihub / unpaywall / openalex / crossref / pmc / europepmc / publisher / local
     priority: int = 3
 
 

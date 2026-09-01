@@ -134,7 +134,7 @@ class CrossrefSource:
 
     def _search(self, client, query: str, species: str, limit: int) -> list[Paper]:
         params = {"query.bibliographic": query, "rows": min(limit, 1000) if limit > 0 else 1000,
-                  "select": "DOI,title,abstract,author,published,container-title,type"}
+                  "select": "DOI,title,abstract,author,published,container-title,type,link"}
         items = client.get("https://api.crossref.org/works", params=params).json()["message"]["items"]
         papers = []
         for item in items:
@@ -145,13 +145,19 @@ class CrossrefSource:
             if species and species.casefold() not in combined:
                 continue
             date_parts = (item.get("published") or {}).get("date-parts") or [[]]
-            papers.append(Paper(
+            paper = Paper(
                 title=title, abstract=clean_text(item.get("abstract")),
                 year=str(date_parts[0][0]) if date_parts and date_parts[0] else "",
                 journal=clean_text(" ".join(item.get("container-title", []))),
                 authors=author_names(item.get("author", [])), doi=normalize_doi(item.get("DOI", "")),
                 sources={"Crossref"}, species={species} if species else set(),
-            ))
+            )
+            for link in item.get("link") or []:
+                url = link.get("URL") if isinstance(link, dict) else ""
+                content_type = str(link.get("content-type") or "").casefold() if isinstance(link, dict) else ""
+                if url and ("pdf" in content_type or str(url).casefold().endswith(".pdf")):
+                    paper.add_candidate(str(url), "crossref", priority=1)
+            papers.append(paper)
         return papers
 
     def search_species(self, client, species: str, limit: int) -> list[Paper]:
@@ -162,18 +168,24 @@ class CrossrefSource:
             return []
         try:
             payload = client.get(f"https://api.crossref.org/works/{doi}",
-                                 params={"select": "DOI,title,abstract,author,published,container-title"}).json()["message"]
+                                 params={"select": "DOI,title,abstract,author,published,container-title,link"}).json()["message"]
         except Exception:
             return []
         title = clean_text(" ".join(payload.get("title", [])))
         date_parts = (payload.get("published") or {}).get("date-parts") or [[]]
-        return [Paper(
+        paper = Paper(
             title=title or doi, abstract=clean_text(payload.get("abstract")),
             year=str(date_parts[0][0]) if date_parts and date_parts[0] else "",
             journal=clean_text(" ".join(payload.get("container-title", []))),
             authors=author_names(payload.get("author", [])), doi=normalize_doi(doi),
             sources={"Crossref"},
-        )]
+        )
+        for link in payload.get("link") or []:
+            url = link.get("URL") if isinstance(link, dict) else ""
+            content_type = str(link.get("content-type") or "").casefold() if isinstance(link, dict) else ""
+            if url and ("pdf" in content_type or str(url).casefold().endswith(".pdf")):
+                paper.add_candidate(str(url), "crossref", priority=1)
+        return [paper]
 
 
 class SemanticScholarSource:
