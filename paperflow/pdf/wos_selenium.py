@@ -42,13 +42,33 @@ class WosSeleniumEngine:
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
         options = Options()
-        options.add_argument("--start-maximized")
+        options.binary_location = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        profile = Path(os.getenv("PAPERFLOW_WOS_PROFILE", str(Path.home() / ".paperflow" / "wos-chrome-profile")))
+        profile.mkdir(parents=True, exist_ok=True)
+        options.add_argument(f"--user-data-dir={profile}")
+        options.add_argument("--window-size=1440,900")
         options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--remote-allow-origins=*")
+        options.add_argument("--disable-dev-shm-usage")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         prefs = {"download.default_directory": str(self.downloads_dir),
                  "download.prompt_for_download": False, "plugins.always_open_pdf_externally": True}
         options.add_experimental_option("prefs", prefs)
-        self.driver = webdriver.Chrome(options=options)
+        try:
+            self.driver = webdriver.Chrome(options=options)
+        except Exception as chrome_error:
+            # Some macOS installations reject the Chrome binary while the
+            # bundled Edge is healthy.  Keep the same visible workflow and
+            # fall back automatically, preserving the login window.
+            try:
+                from selenium.webdriver.edge.options import Options as EdgeOptions
+                edge = EdgeOptions()
+                edge.binary_location = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+                edge.add_argument("--window-size=1440,900")
+                edge.add_experimental_option("prefs", prefs)
+                self.driver = webdriver.Edge(options=edge)
+            except Exception:
+                raise chrome_error
         self.driver.get("https://webofscience.clarivate.cn/wos/woscc/basic-search")
         return self.driver
 
