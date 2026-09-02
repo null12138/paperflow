@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -77,8 +78,40 @@ class WosBrowserEngine:
         request = urllib.request.Request(
             BRIDGE, data=payload, headers={"Content-Type": "application/json"}
         )
-        with urllib.request.urlopen(request, timeout=45) as response:
-            result = json.loads(response.read().decode())
+        # The local extension bridge occasionally answers 502 while Chrome is
+        # switching tabs.  Retry the idempotent command briefly; without this
+        # one transient hand-off failure aborts every item in a batch.
+        last_error: Exception | None = None
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(request, timeout=20) as response:
+                    result = json.loads(response.read().decode())
+                break
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                if exc.code not in {502, 503, 504} or attempt == 3:
+                    break
+                time.sleep(0.5 * (attempt + 1))
+            except urllib.error.URLError as exc:
+                last_error = exc
+                if attempt == 3:
+                    break
+                time.sleep(0.5 * (attempt + 1))
+        # On macOS some Python HTTP stacks intermittently receive an empty 502
+        # from the local daemon while curl succeeds.  Use curl as a transport
+        # fallback; it still talks only to localhost and does not alter the
+        # browser session or credentials.
+        try:
+            raw = subprocess.check_output(
+                ["curl", "-sS", "--max-time", "20", "-X", "POST", BRIDGE,
+                 "-H", "Content-Type: application/json", "--data-binary", payload],
+                text=True,
+            )
+            result = json.loads(raw)
+        except (OSError, subprocess.CalledProcessError, ValueError):
+            if last_error:
+                raise last_error
+            raise RuntimeError("WebBridge 请求失败")
         if not result.get("ok"):
             raise RuntimeError(str(result.get("error") or result))
         return result.get("data") or {}
