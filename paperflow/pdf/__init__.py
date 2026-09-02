@@ -18,6 +18,7 @@ from .scihub import SciHubEngine
 from .oa import OaEngine
 from .publisher import PublisherEngine
 from .wos_browser import WosBrowserEngine
+from .wos_selenium import WosSeleniumEngine
 
 
 def safe_slug(title: str) -> str:
@@ -72,7 +73,11 @@ class PdfEngine:
         self.use_direct_candidates = use_oa if use_direct_candidates is None else use_direct_candidates
         self.pmc_only = pmc_only
         self.publisher = PublisherEngine(proxies=self.proxies) if use_publisher else None
-        self.wos = WosBrowserEngine() if use_wos else None
+        # Authorized mode defaults to a visible local Selenium browser.  The
+        # WebBridge implementation remains available only when explicitly
+        # requested for backwards compatibility.
+        browser_mode = os.getenv("PAPERFLOW_WOS_BROWSER", "selenium").strip().lower()
+        self.wos = (WosBrowserEngine() if browser_mode in {"webbridge", "kimi"} else WosSeleniumEngine()) if use_wos else None
         if use_cnki:
             from .cnki import CnkiPdfEngine
             self.cnki = CnkiPdfEngine()

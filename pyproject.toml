@@ -14,9 +14,10 @@ dependencies = [
     "lxml>=4.9",
     "playwright>=1.40",
     "playwright-stealth>=2.0,<3",
+    "selenium>=4.20,<5",
     "pypdf>=5.0,<7",
     "tqdm>=4.66,<5",
-    "urllib3>=1.26,<2",  # macOS 自带 Python 链接 LibreSSL，避免 urllib3 v2 警告
+    "urllib3>=1.26,<3",
     "textual>=0.89,<1",
 ]
 
