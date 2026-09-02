@@ -94,12 +94,28 @@ class WosBrowserEngine:
             self._bridge("close_session")
         except Exception:
             pass
-        self._bridge("navigate", {
-            "url": WOS_URL, "newTab": True, "group_title": SESSION,
-        })
+        # WebBridge requires find_tab before opening a page.  After closing a
+        # stale session this normally returns no tab, but keeping the lookup
+        # here also lets a user-opened WOS tab be reused safely.
+        try:
+            found = self._bridge("find_tab", {"url": "https://webofscience.clarivate.cn", "active": False})
+        except Exception:
+            found = {}
+        if not found:
+            self._bridge("navigate", {
+                "url": WOS_URL, "newTab": True, "group_title": SESSION,
+            })
         # Let the WOS SPA finish bootstrapping before a direct UID navigation;
         # otherwise its initial route can overwrite the requested record URL.
         self._wait("!!document.querySelector('input[aria-label^=\"Search box 1\"]')", 45)
+
+    def _require_login(self) -> None:
+        """Fail early with an actionable message when the bridge tab is logged out."""
+        logged_out = self._evaluate(
+            "!![...document.querySelectorAll('button,a')].find(e => /^(Sign In|登录)$/i.test((e.innerText || '').trim()))"
+        )
+        if logged_out:
+            raise RuntimeError("WOS 浏览器未登录，请在 WebBridge 使用的浏览器标签中先完成机构登录")
 
     @staticmethod
     def _resolve_uid(doi: str) -> str:
@@ -112,7 +128,7 @@ class WosBrowserEngine:
                 WOS_API_URL,
                 headers={"X-ApiKey": key, "Accept": "application/json"},
                 params={"db": "WOS", "q": f"DO=({doi})", "limit": 1, "page": 1},
-                timeout=25,
+                timeout=(6, 18),
             )
             response.raise_for_status()
             hits = response.json().get("hits") or []
@@ -298,13 +314,17 @@ class WosBrowserEngine:
             return False, "WOS 浏览器下载需要 DOI"
         try:
             self._open_wos()
+            self._require_login()
             clean_doi = doi.strip()
             uid = self._resolve_uid(clean_doi)
             if uid:
-                self._bridge("navigate", {
-                    "url": f"https://webofscience.clarivate.cn/wos/woscc/full-record/{uid}",
-                    "newTab": False, "group_title": SESSION,
-                })
+                record_url = f"https://webofscience.clarivate.cn/wos/woscc/full-record/{uid}"
+                try:
+                    self._bridge("find_tab", {"url": record_url, "active": False})
+                except Exception:
+                    self._bridge("navigate", {
+                        "url": record_url, "newTab": False, "group_title": SESSION,
+                    })
                 if not self._wait("location.href.includes('/full-record/')", self.timeout):
                     uid = ""
             if not uid:
@@ -316,9 +336,12 @@ class WosBrowserEngine:
                 except RuntimeError:
                     # Some WOS deployments render Full Text Links only after a
                     # normal DOI search, even though the direct UID page works.
-                    self._bridge("navigate", {
-                        "url": WOS_URL, "newTab": False, "group_title": SESSION,
-                    })
+                    try:
+                        self._bridge("find_tab", {"url": WOS_URL, "active": False})
+                    except Exception:
+                        self._bridge("navigate", {
+                            "url": WOS_URL, "newTab": False, "group_title": SESSION,
+                        })
                     self._search_doi(clean_doi)
                     self._click_full_text()
             source = self._click_pdf()
