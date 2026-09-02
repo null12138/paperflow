@@ -175,7 +175,7 @@ class PaperflowTui(App):
                         value="pending", id="download-status",
                     )
                 with Horizontal(classes="form-row"):
-                    yield Input(value="authorized", placeholder="PDF 下载通道（authorized=授权下载）", id="download-mode")
+                    yield Input(value="oa+scihub", placeholder="PDF 下载通道（oa+scihub=开放获取后 Sci-Hub）", id="download-mode")
                     yield Input(value="downloads", placeholder="输出目录", id="download-out")
                     yield Input(value="100", placeholder="条数", id="download-limit", type="integer")
                     yield Input(value="60", placeholder="每分钟（推荐 60）", id="download-rpm", type="integer")
@@ -356,7 +356,7 @@ class PaperflowTui(App):
             status = self.query_one("#download-status", Select).value
             self.run_download_worker(
                 self._value("#download-keyword"), self._value("#download-source"), str(status),
-                self._value("#download-mode") or "authorized", Path(self._value("#download-out") or "downloads"),
+                self._value("#download-mode") or "oa+scihub", Path(self._value("#download-out") or "downloads"),
                 self._integer(self._value("#download-limit"), 100),
                 self._integer(self._value("#download-rpm"), 30), self._value("#download-email"),
                 self._number(self._value("#download-min-if")), self._number(self._value("#download-max-if")),
