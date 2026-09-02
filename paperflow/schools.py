@@ -29,6 +29,8 @@ class SchoolEntry:
     host: str        # WebVPN 入口，如 https://webvpn.pku.edu.cn
     key: bytes       # AES 密钥（16/24/32 字节）
     iv: bytes        # AES IV（默认等于 key）
+    school_type: str = "webvpn"  # "webvpn"=桑弧 AES 转发；"sangfor"=Array/深信服 SSL VPN 门户
+    gateway: str = ""
 
 
 def _load_db() -> dict:
@@ -51,7 +53,9 @@ def _parse_entry(name: str, province: str, info: dict) -> SchoolEntry | None:
     key = key_str.encode("utf-8") if key_str else DEFAULT_KEY
     iv = iv_str.encode("utf-8") if iv_str else key
     return SchoolEntry(name=name, province=province, host=host.rstrip("/"),
-                       key=key, iv=iv)
+                       key=key, iv=iv,
+                       school_type=info.get("type", "webvpn"),
+                       gateway=info.get("gateway", ""))
 
 
 def list_schools() -> list[SchoolEntry]:

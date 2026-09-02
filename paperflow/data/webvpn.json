@@ -99,6 +99,10 @@
     },
     "华北电力大学": {
       "host": "myvpn.ncepu.edu.cn"
+    },
+    "首都师范大学": {
+      "host": "https://vpn.cnu.edu.cn",
+      "type": "sangfor"
     }
   },
   "福建": {

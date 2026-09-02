@@ -174,6 +174,8 @@ def download_database_queue(
         use_oa="oa" in mode,
         use_publisher="publisher" in mode,
         use_webvpn="webvpn" in mode,
+        use_carsi="carsi" in mode,
+        carsi_idp=os.getenv("PAPERFLOW_CARSI_IDP", ""),
         use_wos=bool(mode_tokens & {"wos", "authorized", "授权下载"}),
         use_cnki="cnki" in mode,
         use_direct_candidates="direct" in mode or "oa" in mode,
