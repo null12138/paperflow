@@ -360,6 +360,16 @@ class PaperDatabase:
         self.connection.commit()
         return paper_id
 
+    def record_download_start(self, paper: Paper, detail: str = "下载任务已开始") -> int:
+        """Persist queue start immediately, before network work begins."""
+        paper_id = self.upsert_paper(paper)
+        self.connection.execute(
+            "INSERT INTO download_attempts(paper_id, success, download_source, detail, pdf_path) VALUES (?, 0, '', ?, '')",
+            (paper_id, detail),
+        )
+        self.connection.commit()
+        return paper_id
+
     def stats(self) -> dict[str, int]:
         queries = {
             "papers": "SELECT COUNT(*) FROM papers",

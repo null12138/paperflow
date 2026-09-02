@@ -196,6 +196,8 @@ def download_database_queue(
         tab_count = int(os.getenv("PAPERFLOW_WOS_TABS", "1") or 1)
         if getattr(engine, "wos", None) and tab_count > 1 and len(papers) > 1:
             from .pdf import paper_filename
+            for paper in papers:
+                database.record_download_start(paper)
             pairs = [(p.doi, p) for p in papers if p.doi]
             results = engine.wos.fetch_many(
                 pairs, lambda p: out_dir / paper_filename(p), tab_count=tab_count
@@ -212,6 +214,8 @@ def download_database_queue(
             return paper, ok, info
 
         with ThreadPoolExecutor(max_workers=min(workers, max(1, len(papers)))) as pool:
+            for paper in papers:
+                database.record_download_start(paper)
             futures = [pool.submit(fetch_one, paper) for paper in papers]
             for index, future in enumerate(as_completed(futures), 1):
                 paper, ok, info = future.result()
