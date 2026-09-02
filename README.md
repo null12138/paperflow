@@ -18,7 +18,7 @@
 | | **CNKI PDF**（复用已保存的机构会话，点击站内授权下载） | ✅ |
 | | **出版社订阅适配器**（Elsevier/Springer/Wiley/Oxford/Nature/T&F/AAAS…） | 🔧 需先 `auth login` 对应站点 |
 
-> CNKI 与付费墙出版社在无公开 API 的前提下，通过**浏览器授权登录**（学校账号/机构 SSO）后以站点会话访问，不依赖 Kimi WebBridge 等外部扩展。CNKI 会分页抓取列表，并以每秒最多 1 篇的速度补摘要详情。
+> CNKI 与付费墙出版社在无公开 API 的前提下，通过**浏览器授权登录**（学校账号/机构 SSO）后以站点会话访问，不依赖 Kimi WebBridge 等外部扩展。WOS 授权下载使用 Selenium 有头 Chrome；首次运行需手动完成 SSO/Robot，登录态保存在本机浏览器 profile。CNKI 会分页抓取列表，并以每秒最多 1 篇的速度补摘要详情。
 
 ## 安装（全新系统）
 
@@ -41,7 +41,7 @@ pip install -e .
 playwright install chromium
 ```
 
-> 依赖 Playwright 浏览器（授权弹窗与 Sci-Hub 自动会话需要）。
+> 依赖 Playwright 浏览器（CNKI 等授权流程）和 Selenium 管理的 Chrome（WOS 授权下载）。
 
 可选环境变量（`.env.example` 有清单）：
 
@@ -129,12 +129,12 @@ python -m paperflow.cli search --input input.txt --sources PubMed,Crossref,S2 --
 ```bash
 # doi_list.tsv：每行 "DOI<TAB>题名"（纯 DOI 也可）
 python -m paperflow.cli download --doi-file doi_list.tsv --out downloads \
-    --mode scihub+oa+publisher --rpm 30 --email your@email.com
+    --mode oa+scihub --rpm 30 --email your@email.com
 ```
 
 | 参数 | 说明 |
 |---|---|
-| `--mode` | 下载通道，可组合：`cnki` / `scihub` / `oa` / `publisher`（逗号或 `+` 分隔） |
+| `--mode` | 下载通道，可组合：`cnki` / `scihub` / `oa` / `publisher` / `authorized`（逗号或 `+` 分隔）；默认 `oa+scihub` |
 | `--rpm` | 限速（篇/分钟），默认 30；**稳定优先，1 篇/分钟也行**（`--rpm 1`） |
 | `--failed` | 失败清单（DOI、题名、原因） |
 | `--db` | SQLite 路径，默认 `paperflow.db` |
@@ -148,9 +148,9 @@ python -m paperflow.cli download --doi-file doi_list.tsv --out downloads \
 # 第一步：只检索和入库，不下载
 paperflow search --species "银杏" --sources CNKI --limit 20 --db paperflow.db
 
-# 第二步：以后任意时间从数据库下载未尝试项
+# 第二步：以后任意时间从数据库下载未尝试项（OA 失败后尝试 Sci-Hub）
 paperflow download-db --db paperflow.db --keyword "银杏" --source CNKI \
-  --mode cnki --status pending --out cnki_downloads
+  --mode oa+scihub --status pending --out downloads
 
 # 重试以前失败的项目
 paperflow download-db --db paperflow.db --keyword "银杏" \
@@ -158,6 +158,8 @@ paperflow download-db --db paperflow.db --keyword "银杏" \
 ```
 
 `download-db` 支持 `--keyword`、`--source`、`--status pending|failed|all`、`--min-if`、`--max-if` 和 `--limit`。Europe PMC、S2 等直接全文候选同样会持久化，因此无 DOI 的开放全文也能稍后下载。
+
+网络下载通道默认最多 32 个并发 worker；WOS/Selenium 授权下载保持单浏览器串行。每次下载任务启动、成功或失败都会写入 `download_attempts`，失败会覆盖当前文献的旧 PDF 状态并保存明确原因。
 
 ### 5. 影响因子（JIF）
 
