@@ -135,3 +135,22 @@ class WosSeleniumEngine:
         if self.driver:
             self.driver.quit()
             self.driver = None
+
+    def fetch_many(self, items, target_for, tab_count: int = 10):
+        """Use a shared logged-in browser with a pool of tabs.
+
+        Navigation and DOM actions are performed one tab at a time (Selenium
+        itself is not thread-safe), while PDF downloads started by each tab may
+        proceed concurrently in Chrome.
+        """
+        driver = self._ensure_driver()
+        self._wait_login()
+        handles = [driver.current_window_handle]
+        for _ in range(max(1, tab_count) - 1):
+            driver.switch_to.new_window("tab")
+            handles.append(driver.current_window_handle)
+        results = []
+        for index, (doi, paper) in enumerate(items):
+            driver.switch_to.window(handles[index % len(handles)])
+            results.append((paper, *self.fetch(doi, target_for(paper))))
+        return results

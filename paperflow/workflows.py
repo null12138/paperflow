@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from datetime import datetime, timezone
@@ -191,6 +192,20 @@ def download_database_queue(
         tokens = {part.strip() for part in mode.replace("+", ",").split(",") if part.strip()}
         # Europe PMC 对过高并发会显著变慢甚至超时；8 路实测吞吐更稳定。
         workers = 8 if tokens and tokens <= {"direct", "oa", "pmc"} else 1
+
+        tab_count = int(os.getenv("PAPERFLOW_WOS_TABS", "1") or 1)
+        if getattr(engine, "wos", None) and tab_count > 1 and len(papers) > 1:
+            from .pdf import paper_filename
+            pairs = [(p.doi, p) for p in papers if p.doi]
+            results = engine.wos.fetch_many(
+                pairs, lambda p: out_dir / paper_filename(p), tab_count=tab_count
+            )
+            for index, (paper, ok, info) in enumerate(results, 1):
+                database.save_download(paper, ok, info)
+                _emit(progress, f"[{index}/{len(results)}] {'✓' if ok else '✗'} {paper.title[:60]} | {info[:120]}")
+                ok_count += int(ok)
+                fail_count += int(not ok)
+            return {"total": len(results), "success": ok_count, "failed": fail_count}
 
         def fetch_one(paper: Paper):
             ok, info = engine.fetch(paper)
