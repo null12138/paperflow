@@ -178,10 +178,10 @@ class PdfEngine:
                     strategies.append((name, lambda url=candidate.url: self._fetch_direct_candidate(url, target)))
         # 既有三种策略都以 DOI 为入口；无 DOI 的 CNKI 论文不应向它们传空字符串。
         if paper.doi:
-            if self.scihub:
-                strategies.append(("scihub", lambda: self.scihub.fetch(paper.doi, target)))
             if self.oa:
                 strategies.append(("oa", lambda: self.oa.fetch(paper.doi, target)))
+            if self.scihub:
+                strategies.append(("scihub", lambda: self.scihub.fetch(paper.doi, target)))
             if self.publisher:
                 strategies.append(("publisher", lambda: self.publisher.fetch(paper.doi, target)))
             if self.wos:

@@ -333,6 +333,18 @@ class PaperDatabase:
     ) -> int:
         paper.download_detail = detail or paper.download_detail
         paper_id = self.upsert_paper(paper, keywords)
+        # Each attempt is authoritative: a failed retry must not leave a stale
+        # PDF path/source from an earlier run looking like a current success.
+        if not success:
+            self.connection.execute(
+                "UPDATE papers SET pdf_path = '', download_source = '', download_detail = ?, failure_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (detail or paper.failure_reason or "下载失败（未提供原因）", detail or paper.failure_reason or "下载失败（未提供原因）", paper_id),
+            )
+        else:
+            self.connection.execute(
+                "UPDATE papers SET failure_reason = '', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (paper_id,),
+            )
         self.connection.execute(
             """INSERT INTO download_attempts(
                    paper_id, success, download_source, detail, pdf_path
