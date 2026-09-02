@@ -194,7 +194,7 @@ def download_database_queue(
         # Network-only channels can safely use parallel workers.  Keep browser
         # authorization serial, but OA/Sci-Hub downloads use independent HTTP
         # sessions and can run in parallel (default 10 as requested).
-        workers = 10 if tokens and tokens <= {"direct", "oa", "pmc", "scihub"} else 1
+        workers = 32 if tokens and tokens <= {"direct", "oa", "pmc", "scihub"} else 1
 
         tab_count = int(os.getenv("PAPERFLOW_WOS_TABS", "1") or 1)
         if getattr(engine, "wos", None) and tab_count > 1 and len(papers) > 1:
