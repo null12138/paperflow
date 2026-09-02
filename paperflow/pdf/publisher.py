@@ -118,7 +118,13 @@ class PublisherEngine:
         if meta:
             candidates.append((meta[1], f"模板:{meta[0]}"))
         learned_tpl = learned.get(prefix)
-        if learned_tpl and not any(u == learned_tpl for u, _ in candidates):
+        # Older learned_patterns entries were keyed only by DOI prefix and can
+        # point to a completely different article.  Never reuse such a URL
+        # unless it visibly contains this exact DOI (or its suffix).
+        doi_lower = doi.casefold()
+        suffix_lower = doi_lower.split("/", 1)[-1]
+        if (learned_tpl and (doi_lower in learned_tpl.casefold() or suffix_lower in learned_tpl.casefold())
+                and not any(u == learned_tpl for u, _ in candidates)):
             candidates.append((learned_tpl, "学习模板"))
 
         # 登录会话是直连获取的(cf_clearance 绑定登录 IP)，故 publisher 直连优先
