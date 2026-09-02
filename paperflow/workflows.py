@@ -163,6 +163,7 @@ def download_database_queue(
     """从 SQLite 恢复论文队列并下载，逐条把结果写回同一数据库。"""
     from .pdf import PdfEngine
 
+    mode_tokens = {part.strip().casefold() for part in mode.replace(",", "+").split("+") if part.strip()}
     engine = PdfEngine(
         out_dir=out_dir,
         email=email,
@@ -171,6 +172,7 @@ def download_database_queue(
         use_scihub="scihub" in mode,
         use_oa="oa" in mode,
         use_publisher="publisher" in mode,
+        use_wos=bool(mode_tokens & {"wos", "authorized", "授权下载"}),
         use_cnki="cnki" in mode,
         use_direct_candidates="direct" in mode or "oa" in mode,
         pmc_only="pmc" in mode,
@@ -226,7 +228,47 @@ def preflight_download_candidates(
             keyword=keyword, source=source, status="all", limit=limit
         )
         doi_papers = [paper for paper in papers if paper.doi]
-        parsed = with_candidates = failed = enriched_abstracts = 0
+        parsed = with_candidates = failed = enriched_abstracts = pmc_candidates = 0
+
+        # DOI -> PMCID can be resolved in large official batches, avoiding
+        # thousands of publisher landing-page requests before OA downloading.
+        # Keep URLs comfortably below common proxy/server request-line limits;
+        # NCBI accepts up to 200 IDs, but unusually long DOI values can overflow.
+        pmc_batch_size = 100
+        pmc_batches = [
+            doi_papers[i:i + pmc_batch_size]
+            for i in range(0, len(doi_papers), pmc_batch_size)
+        ]
+        for batch_index, batch in enumerate(pmc_batches, 1):
+            try:
+                resolved_pmc = oa.bulk_pmc_idconv(paper.doi for paper in batch)
+            except Exception as exc:
+                _emit(
+                    progress,
+                    f"[PMC {batch_index}/{len(pmc_batches)}] ✗ "
+                    f"{type(exc).__name__}: {str(exc)[:100]}",
+                )
+                continue
+            batch_hits = 0
+            for paper in batch:
+                pmcid = resolved_pmc.get(paper.doi.lower(), "")
+                if not pmcid:
+                    continue
+                paper.pmcid = paper.pmcid or pmcid
+                before = len(paper.pdf_candidates)
+                paper.add_candidate(
+                    f"https://europepmc.org/api/getPdf?pmcid={pmcid}",
+                    "europepmc", priority=1,
+                )
+                if len(paper.pdf_candidates) > before:
+                    batch_hits += 1
+            if batch_hits:
+                database.save_papers(batch)
+                pmc_candidates += batch_hits
+            _emit(
+                progress,
+                f"[PMC {batch_index}/{len(pmc_batches)}] ✓ 解析 {len(batch)} 篇，新增候选 {batch_hits}",
+            )
         openalex_available = True
         if doi_papers:
             try:
@@ -291,10 +333,15 @@ def preflight_download_candidates(
                     f"[{batch_index}/{len(batches)}] ✓ {provider} 解析 {len(batch)} 篇；"
                     f"累计候选 {with_candidates}，补摘要 {enriched_abstracts}",
                 )
-    _emit(progress, f"预解析完成：处理 {parsed} 篇，发现候选 {with_candidates} 篇，失败 {failed} 篇")
+    _emit(
+        progress,
+        f"预解析完成：处理 {parsed} 篇，发现 OA 候选 {with_candidates} 篇，"
+        f"新增 PMC 候选 {pmc_candidates} 篇，失败 {failed} 篇",
+    )
     return {
         "total": len(papers), "parsed": parsed, "with_candidates": with_candidates,
-        "failed": failed, "enriched_abstracts": enriched_abstracts,
+        "pmc_candidates": pmc_candidates, "failed": failed,
+        "enriched_abstracts": enriched_abstracts,
     }
 
 

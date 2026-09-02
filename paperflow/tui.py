@@ -166,7 +166,7 @@ class PaperflowTui(App):
 
             with TabPane("下载队列", id="downloads"):
                 yield Label("第二步：按来源从 SQLite 独立恢复并后台下载", classes="section-title")
-                yield Static("来源为空表示下载全部已入库文献；PDF 实际通道可组合 CNKI / SCI-Hub / OA / 出版社。", classes="hint")
+                yield Static("来源为空表示下载全部已入库文献；通道可组合 CNKI / OA / 出版社 / 授权下载（WOS 浏览器模拟点击）。", classes="hint")
                 with Horizontal(classes="form-row"):
                     yield Input(placeholder="关键词（可空）", id="download-keyword")
                     yield Input(placeholder="元数据来源（可空，如 WOS/CNKI）", id="download-source")
@@ -175,7 +175,7 @@ class PaperflowTui(App):
                         value="pending", id="download-status",
                     )
                 with Horizontal(classes="form-row"):
-                    yield Input(value="cnki+scihub+oa+publisher", placeholder="PDF 下载通道", id="download-mode")
+                    yield Input(value="authorized", placeholder="PDF 下载通道（authorized=授权下载）", id="download-mode")
                     yield Input(value="downloads", placeholder="输出目录", id="download-out")
                     yield Input(value="100", placeholder="条数", id="download-limit", type="integer")
                     yield Input(value="60", placeholder="每分钟（推荐 60）", id="download-rpm", type="integer")
@@ -356,7 +356,7 @@ class PaperflowTui(App):
             status = self.query_one("#download-status", Select).value
             self.run_download_worker(
                 self._value("#download-keyword"), self._value("#download-source"), str(status),
-                self._value("#download-mode") or "cnki+oa", Path(self._value("#download-out") or "downloads"),
+                self._value("#download-mode") or "authorized", Path(self._value("#download-out") or "downloads"),
                 self._integer(self._value("#download-limit"), 100),
                 self._integer(self._value("#download-rpm"), 30), self._value("#download-email"),
                 self._number(self._value("#download-min-if")), self._number(self._value("#download-max-if")),

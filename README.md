@@ -61,6 +61,8 @@ Semantic Scholar 请求在适配器内部统一限制为每秒最多 1 次，即
 
 ScienceDirect/Elsevier 下载：启用 `publisher` 通道后，DOI 为 `10.1016/...` 的文章会优先调用 Elsevier Article Retrieval API，并校验返回的 PDF 文件头；API 返回权限错误或非 PDF 时自动回退到出版社页面解析。API Key 不绕过机构订阅或反机器人验证。
 
+WOS 授权下载：`download-db --mode authorized` 会使用已登录的真实浏览器，按 DOI 通过 WOS 官方记录页跳转到授权的全文提供方，再模拟点击各出版社的 PDF 控件。内置 Springer/BMC、Elsevier、Wiley、Oxford、Nature、Taylor & Francis、SAGE、MDPI、PLOS、IEEE、ACS、RSC、BMJ、APS、AIP、ACM、Cambridge、Cell、Frontiers、Hindawi、Thieme、Emerald、De Gruyter、Karger、LWW、JSTOR、BioOne、SciELO 等适配器，并保留通用 `Download PDF` 文本兜底。`authorized` 只使用用户已有机构访问权限，不绕过登录、验证码或付费墙。
+
 Springer Nature 下载：配置 `SPRINGER_NATURE_API_KEY` 后，Springer/ BioMed Central 等 DOI 会先查询 Springer Nature OpenAccess API，找到 OA PDF 才下载；付费文章仍回退 SpringerLink 机构授权。
 
 ## 使用

@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 from paperflow.database import PaperDatabase
 from paperflow.models import Paper
-from paperflow.pdf import PdfEngine, safe_slug
+from paperflow.pdf import PdfEngine, paper_filename
 
 
 class DatabaseTests(unittest.TestCase):
@@ -218,16 +218,23 @@ Abstract: 中文摘要。
 
 
 class PdfSourceTests(unittest.TestCase):
+    def test_distinct_identifiers_never_share_a_target_filename(self):
+        original = Paper(title="A shared paper title", doi="10.1/original")
+        correction = Paper(title="A shared paper title", doi="10.1/correction")
+
+        self.assertNotEqual(paper_filename(original), paper_filename(correction))
+        self.assertTrue(paper_filename(original).startswith("A_shared_paper_title_"))
+
     def test_local_pdf_reuse_records_download_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             paper = Paper(title="Existing paper", doi="10.1/existing")
-            (root / f"{safe_slug(paper.title)}.pdf").write_bytes(b"%PDF-1.4\n")
+            (root / paper_filename(paper)).write_bytes(b"%PDF-1.4\n")
             engine = PdfEngine(root, use_scihub=False, use_oa=False, use_publisher=False)
             ok, _ = engine.fetch(paper)
             self.assertTrue(ok)
             self.assertEqual(paper.download_source, "local")
-            self.assertTrue(paper.downloaded_path.endswith("Existing_paper.pdf"))
+            self.assertTrue(paper.downloaded_path.endswith(paper_filename(paper)))
 
     def test_persisted_direct_candidate_downloads_without_doi(self):
         response = Mock()

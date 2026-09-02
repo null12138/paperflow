@@ -16,6 +16,7 @@ API = "https://api.unpaywall.org/v2/{}"
 OPENALEX_API = "https://api.openalex.org/works/https://doi.org/{}"
 OPENALEX_WORKS_API = "https://api.openalex.org/works"
 S2_BATCH_API = "https://api.semanticscholar.org/graph/v1/paper/batch"
+PMC_IDCONV_API = "https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/"
 PROXY_TIMEOUTS = [8, 12, 25]
 
 
@@ -139,6 +140,44 @@ class OaEngine:
             except (requests.RequestException, ValueError) as exc:
                 last = exc
         raise RuntimeError(f"S2 批量查询失败: {type(last).__name__ if last else 'unknown'}")
+
+    def bulk_pmc_idconv(self, dois: Iterable[str]) -> dict[str, str]:
+        """Use NCBI's official batch API to resolve DOI values to PMC IDs."""
+        values = list(dict.fromkeys(
+            doi.strip().lower() for doi in dois if doi.strip()
+        ))[:200]
+        if not values:
+            return {}
+        params = {
+            "ids": ",".join(values),
+            "format": "json",
+            "versions": "no",
+            "tool": "paperflow",
+            **({"email": self.email} if self.email else {}),
+        }
+        last: Exception | None = None
+        exits = [None] + [proxy for proxy in self.proxies if proxy]
+        for attempt in range(3):
+            for proxy in exits:
+                try:
+                    session = net.make_session(proxy, email=self.email)
+                    response = session.get(PMC_IDCONV_API, params=params, timeout=30)
+                    if response.status_code == 429:
+                        last = RuntimeError("PMC ID converter HTTP 429")
+                        continue
+                    response.raise_for_status()
+                    output: dict[str, str] = {}
+                    for record in response.json().get("records") or []:
+                        doi = str(record.get("doi") or record.get("requested-id") or "").lower()
+                        pmcid = str(record.get("pmcid") or "").upper()
+                        if doi and re.fullmatch(r"PMC\d+", pmcid):
+                            output[doi] = pmcid
+                    return output
+                except (requests.RequestException, ValueError) as exc:
+                    last = exc
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+        raise RuntimeError(f"PMC DOI 批量转换失败: {type(last).__name__ if last else 'unknown'}")
 
     def _candidates_for_doi(self, doi: str) -> list[str]:
         # OpenAlex 不强制邮箱，先查其公开 locations；再用 Unpaywall 补充更完整的 OA 列表。

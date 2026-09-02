@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import re
+import hashlib
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -16,10 +17,25 @@ from ..models import Paper
 from .scihub import SciHubEngine
 from .oa import OaEngine
 from .publisher import PublisherEngine
+from .wos_browser import WosBrowserEngine
 
 
 def safe_slug(title: str) -> str:
     return re.sub(r"[\\/:*?\"<>|\s]+", "_", title).strip("._")[:160] or "paper"
+
+
+def paper_filename(paper: Paper) -> str:
+    """Return a stable, collision-resistant filename for a paper.
+
+    Titles alone are not identities: corrections and their original articles can
+    share the same first 160 characters.  Reusing a title-only path can therefore
+    silently attach one paper's PDF to another database row.  Keep a readable
+    prefix and add a digest of the strongest available scholarly identifier.
+    """
+    identity = paper.doi or paper.pmid or paper.pmcid or paper.title
+    digest = hashlib.sha256(identity.casefold().encode("utf-8")).hexdigest()[:12]
+    readable = safe_slug(paper.title or identity)[:145]
+    return f"{readable}_{digest}.pdf"
 
 
 def pdf_ok(path: Path) -> bool:
@@ -40,6 +56,7 @@ class PdfEngine:
         use_scihub: bool = True,
         use_oa: bool = True,
         use_publisher: bool = False,
+        use_wos: bool = False,
         use_cnki: bool = False,
         use_direct_candidates: bool | None = None,
         pmc_only: bool = False,
@@ -55,6 +72,7 @@ class PdfEngine:
         self.use_direct_candidates = use_oa if use_direct_candidates is None else use_direct_candidates
         self.pmc_only = pmc_only
         self.publisher = PublisherEngine(proxies=self.proxies) if use_publisher else None
+        self.wos = WosBrowserEngine() if use_wos else None
         if use_cnki:
             from .cnki import CnkiPdfEngine
             self.cnki = CnkiPdfEngine()
@@ -62,7 +80,7 @@ class PdfEngine:
             self.cnki = None
 
     def _target_path(self, paper: Paper) -> Path:
-        return self.out / (safe_slug(paper.title or paper.doi) + ".pdf")
+        return self.out / paper_filename(paper)
 
     def _fetch_direct_candidate(self, url: str, target: Path) -> tuple[bool, str]:
         parsed = urlparse(url)
@@ -161,6 +179,8 @@ class PdfEngine:
                 strategies.append(("oa", lambda: self.oa.fetch(paper.doi, target)))
             if self.publisher:
                 strategies.append(("publisher", lambda: self.publisher.fetch(paper.doi, target)))
+            if self.wos:
+                strategies.append(("wos", lambda: self.wos.fetch(paper.doi, target)))
 
         if not strategies:
             paper.failure_reason = "没有可用下载候选（CNKI 需检索详情候选，其他通道需 DOI）"
