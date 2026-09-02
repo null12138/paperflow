@@ -13,6 +13,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "lxml>=4.9",
     "playwright>=1.40",
+    "pycryptodome>=3.20,<4",
     "playwright-stealth>=2.0,<3",
     "selenium>=4.20,<5",
     "pypdf>=5.0,<7",

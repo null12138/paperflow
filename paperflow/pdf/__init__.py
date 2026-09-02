@@ -17,6 +17,7 @@ from ..models import Paper
 from .scihub import SciHubEngine
 from .oa import OaEngine
 from .publisher import PublisherEngine
+from .webvpn import WebVpnEngine
 from .wos_browser import WosBrowserEngine
 from .wos_selenium import WosSeleniumEngine
 
@@ -57,6 +58,7 @@ class PdfEngine:
         use_scihub: bool = True,
         use_oa: bool = True,
         use_publisher: bool = False,
+        use_webvpn: bool = False,
         use_wos: bool = False,
         use_cnki: bool = False,
         use_direct_candidates: bool | None = None,
@@ -73,6 +75,7 @@ class PdfEngine:
         self.use_direct_candidates = use_oa if use_direct_candidates is None else use_direct_candidates
         self.pmc_only = pmc_only
         self.publisher = PublisherEngine(proxies=self.proxies) if use_publisher else None
+        self.webvpn = WebVpnEngine() if use_webvpn else None
         # Authorized mode defaults to a visible local Selenium browser.  The
         # WebBridge implementation remains available only when explicitly
         # requested for backwards compatibility.
@@ -184,6 +187,8 @@ class PdfEngine:
                 strategies.append(("scihub", lambda: self.scihub.fetch(paper.doi, target)))
             if self.publisher:
                 strategies.append(("publisher", lambda: self.publisher.fetch(paper.doi, target)))
+            if self.webvpn:
+                strategies.append(("webvpn", lambda: self.webvpn.fetch(paper.doi, target)))
             if self.wos:
                 strategies.append(("wos", lambda: self.wos.fetch(paper.doi, target)))
 

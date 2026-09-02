@@ -252,6 +252,30 @@ paperflow wos-fetch --input input.txt --max-records 0 --db paperflow.db
 Starter API 提供题名、作者、DOI、期刊和年份，但不保证提供摘要。如需补充 Full Record 字段，
 仍可使用你已获授权的 WOS 浏览器导出；`export-wos` 仅作 legacy 备用，新检索链路不依赖它。
 
+### 9. 高校 WebVPN 机构通道（付费墙终极兜底）
+
+针对 Sci-Hub 未收录、Cloudflare 拦截的付费墙文献（如 Wiley/ACS），可通过学校 WebVPN + CAS
+统一认证走机构订阅下载。内置 100+ 所高校的 WebVPN 入口（数据来自 scansci-pdf，Apache-2.0，
+见 `paperflow/data/webvpn.json`）。
+
+```bash
+# 1) 查找并登录你的学校（弹浏览器完成 CAS/SSO，密码不经过工具）
+paperflow auth webvpn-list --school 北京
+paperflow auth login webvpn --school 北京大学
+# 非登录态检查
+paperflow auth status webvpn    # none / valid / expired / unreachable
+
+# 2) 下载时把 webvpn 加入通道组合（放最后作铃底）
+paperflow download --doi-file doi_list.txt --out downloads \
+    --mode oa+scihub+publisher+webvpn --rpm 20
+paperflow download-db --db paperflow.db --mode oa+scihub+webvpn --status failed --limit 0
+```
+
+实现（`paperflow/pdf/webvpn.py`）：目标 URL 的 hostname 用 AES-128-CFB 加密生成 WebVPN 转发
+地址（`https://<webvpn>/https/<hex(iv)+hex(密文)><原路径>`），复用登录 cookie 经 WebVPN 抓取
+出版社 PDF 直链并校验 `%PDF-` 头；HTTP 通道失败时自动险底到可见浏览器（监听 PDF 响应 /
+触发下载）。会话保存在 `sessions/webvpn.json`（学校、入口、密钥、cookie）。
+
 ## 代码结构
 
 ```
@@ -265,11 +289,13 @@ paperflow/
   database.py         SQLite schema、候选队列、JIF 匹配、查询与迁移
   sources/            元数据源适配器（注册表模式，可插拔增删）
     wos.py  pubmed_crossref_s2.py  cnki.py
-  pdf/                PDF 引擎：依次尝试 CNKI → Sci-Hub → OA → 出版社
+  pdf/                PDF 引擎：依次尝试 CNKI → Sci-Hub → OA → 出版社 → WebVPN
     cnki.py           CNKI 机构会话 + 浏览器下载事件 + PDF 校验
     scihub.py         altcha 求解 + DDoS-Guard 会话
     oa.py             Unpaywall / PMC
     publisher.py      出版社订阅适配（带浏览器授权登录态）
+    webvpn.py         高校 WebVPN + CAS 机构通道（AES 转发 URL + 会话复用）
+  schools.py          高校 WebVPN 学校数据库（data/webvpn.json）
   legacy/             旧版独立脚本（wos_species_downloader 等，保留可参考）
 tests/                主包的离线单元测试
 ```

@@ -91,6 +91,7 @@ def cmd_download(args: argparse.Namespace) -> int:
         use_scihub="scihub" in args.mode,
         use_oa="oa" in args.mode,
         use_publisher="publisher" in args.mode,
+        use_webvpn="webvpn" in args.mode,
         use_cnki="cnki" in args.mode,
     )
     ok_count = fail_count = 0
@@ -179,6 +180,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                        cookie_file=Path("scihub_cookies.json"),
                        use_scihub="scihub" in args.mode, use_oa="oa" in args.mode,
                        use_publisher="publisher" in args.mode,
+                       use_webvpn="webvpn" in args.mode,
                        use_cnki="cnki" in args.mode)
     ok_count = fail_count = 0
     with PaperDatabase(args.db) as database:
@@ -281,12 +283,23 @@ def cmd_auth(args: argparse.Namespace) -> int:
     """浏览器授权：弹出窗口登录站点并持久化登录态。"""
     from . import auth
     if args.action == "login":
+        if args.site == "webvpn":
+            from .pdf.webvpn import webvpn_login
+            ok = webvpn_login(args.school, headful=not args.headless)
+            return 0 if ok else 3
         if args.site not in auth.AUTH_SITES:
-            print(f"未知站点 {args.site}；可用: {', '.join(auth.AUTH_SITES)}")
+            print(f"未知站点 {args.site}；可用: {', '.join(auth.AUTH_SITES)}, webvpn")
             return 2
         auth.login(args.site, headful=not args.headless)
     elif args.action == "status":
+        if args.site == "webvpn":
+            from .pdf.webvpn import WebVpnEngine
+            print(f"webvpn         {WebVpnEngine().session_status()}")
+            return 0
         auth.status(args.site)
+    elif args.action == "webvpn-list":
+        from .pdf.webvpn import show_schools
+        show_schools(args.school or "")
     return 0
 
 
@@ -447,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
     p_d = sub.add_parser("download", help="按 DOI 清单批量下载 PDF")
     p_d.add_argument("--doi-file", type=Path, required=True)
     p_d.add_argument("--out", type=Path, default=Path("downloads"))
-    p_d.add_argument("--mode", default="scihub+oa", help="可组合: cnki, scihub, oa, publisher（逗号或+分隔）")
+    p_d.add_argument("--mode", default="scihub+oa", help="可组合: cnki, scihub, oa, publisher, webvpn（逗号或+分隔）")
     p_d.add_argument("--rpm", type=int, default=30, help="下载限速（篇/分钟），稳定优先")
     p_d.add_argument("--limit", type=int, default=0)
     p_d.add_argument("--email", default="")
@@ -459,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
     p_dd = sub.add_parser("download-db", help="从 SQLite 队列独立下载（与检索完全解耦）")
     p_dd.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径")
     p_dd.add_argument("--out", type=Path, default=Path("downloads"))
-    p_dd.add_argument("--mode", default="oa+scihub", help="可组合: direct, cnki, oa, scihub, publisher, authorized；默认 oa+scihub")
+    p_dd.add_argument("--mode", default="oa+scihub", help="可组合: direct, cnki, oa, scihub, publisher, webvpn, authorized；默认 oa+scihub")
     p_dd.add_argument("--keyword", default="", help="只下载指定检索关键词")
     p_dd.add_argument("--source", default="", help="只下载指定元数据来源，如 CNKI")
     p_dd.add_argument("--status", choices=["pending", "failed", "all", "candidate", "candidate-pending", "candidate-pmc-pending"], default="pending",
@@ -536,8 +549,9 @@ def main(argv: list[str] | None = None) -> int:
     p_w.set_defaults(fn=cmd_export_wos)
 
     p_a = sub.add_parser("auth", help="浏览器授权（弹窗登录 WOS/CNKI/出版社等站点）")
-    p_a.add_argument("action", choices=["login", "status"])
-    p_a.add_argument("site", nargs="?", default="", help="scihub/cnki/wos/sciencedirect/springer/wiley/publisher")
+    p_a.add_argument("action", choices=["login", "status", "webvpn-list"])
+    p_a.add_argument("site", nargs="?", default="", help="scihub/cnki/wos/sciencedirect/springer/wiley/publisher/webvpn")
+    p_a.add_argument("--school", default="", help="webvpn 登录/搜索用学校名（如 北京大学）")
     p_a.add_argument("--headless", action="store_true", help="无头模式（仅适用 auto 站点如 scihub）")
     p_a.set_defaults(fn=cmd_auth)
 
