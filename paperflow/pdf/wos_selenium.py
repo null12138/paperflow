@@ -90,22 +90,28 @@ class WosSeleniumEngine:
     def fetch(self, doi: str, target: Path) -> tuple[bool, str]:
         if not doi.strip():
             return False, "WOS Selenium 下载需要 DOI"
+        stage = "启动浏览器"
         try:
             from selenium.webdriver.common.by import By
             from selenium.webdriver.support.ui import WebDriverWait
             from selenium.webdriver.support import expected_conditions as EC
             driver = self._ensure_driver()
+            stage = "等待 WOS 登录"
             self._wait_login()
             uid = self._resolve_uid(doi.strip())
             if not uid:
                 return False, "WOS API 未找到该 DOI"
             before = {p for p in self.downloads_dir.glob("*.pdf") if p.is_file()}
+            stage = "打开 WOS 文献记录"
             driver.get(f"https://webofscience.clarivate.cn/wos/woscc/full-record/{uid}")
             wait = WebDriverWait(driver, self.timeout)
+            stage = "点击 WOS 全文授权链接"
             link = wait.until(EC.element_to_be_clickable((By.XPATH,
                 "//*[self::a or self::button][contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'full text') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'publisher') ]")))
             driver.execute_script("arguments[0].click();", link)
+            stage = "等待出版社页面"
             wait.until(lambda d: "webofscience." not in d.current_url)
+            stage = "点击出版社 PDF"
             pdf = wait.until(EC.element_to_be_clickable((By.XPATH,
                 "//*[self::a or self::button][contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'pdf') or contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'download')]")))
             driver.execute_script("arguments[0].click();", pdf)
@@ -122,7 +128,8 @@ class WosSeleniumEngine:
                 time.sleep(1)
             return False, "出版社页面点击后未发现 PDF 下载"
         except Exception as exc:
-            return False, f"WOS Selenium 失败：{str(exc)[:180]}"
+            message = str(exc).strip() or type(exc).__name__
+            return False, f"WOS Selenium 失败（{stage}）：{message[:180]}"
 
     def close(self) -> None:
         if self.driver:
