@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -32,36 +33,44 @@ def save_learned(data: dict) -> None:
 
 
 def _find_pdf_links(session: requests.Session, page_url: str, text: str) -> list[str]:
-    """从落地页提取可能的 PDF 链接（按优先级排序）。"""
+    """从落地页提取可能的 PDF 链接（按优先级排序）。
+
+    The broader metadata/embedded-viewer scan is adapted from the MIT-licensed
+    InstSci ``publisher_pdf_router`` (Rimagination/instsci).  It remains a
+    candidate discovery step only; every candidate is still downloaded and
+    accepted only when its bytes begin with ``%PDF-``.
+    """
     cands: list[str] = []
     soup = BeautifulSoup(text, "html.parser")
-    meta = soup.find("meta", attrs={"name": "citation_pdf_url"})
-    if meta and meta.attrs.get("content"):
-        cands.append(str(meta.attrs["content"]))
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        low = href.lower()
-        if low.endswith(".pdf") or "pdf" in low and ("download" in low or "pdf" in low):
-            cands.append(href)
-        elif a.get_text(" ", strip=True).lower() in ("pdf", "download pdf", "full text pdf", "pdf (1"):
-            cands.append(href)
-    for tag in soup.find_all(["iframe", "embed", "object"]):
-        for attr in ("src", "data"):
-            url = tag.attrs.get(attr)
-            if url and ".pdf" in str(url).lower():
-                cands.append(str(url))
+    for meta in soup.find_all("meta"):
+        key = str(meta.get("name") or meta.get("property") or meta.get("itemprop") or "").lower()
+        value = str(meta.get("content") or "").strip()
+        if value and ("citation_pdf_url" in key or key.endswith("pdf_url") or key == "pdf_url"):
+            cands.append(value)
+    for node in soup.find_all(["a", "link", "iframe", "embed", "object"]):
+        target = str(node.get("href") or node.get("src") or node.get("data") or "").strip()
+        if not target:
+            continue
+        label = " ".join(filter(None, [node.get_text(" ", strip=True), node.get("title"), node.get("aria-label")])).lower()
+        low = target.lower()
+        if low.endswith(".pdf") or any(x in low for x in ("/pdf", "/epdf", "/pdfdirect", "/pdfft", "download=true")) or "pdf" in label:
+            cands.append(target)
+        # Publishers often hide the real asset in a query parameter.
+        for key, values in parse_qs(urlparse(urljoin(page_url, target)).query).items():
+            if key.lower() in {"file", "pdf", "src", "url"}:
+                cands.extend(v for v in values if "pdf" in v.lower())
+    # Firefox/Chrome PDF.js viewers expose a defaultUrl in an inline script.
+    for script in soup.find_all("script"):
+        body = script.string or script.get_text(" ", strip=False)
+        for match in re.finditer(r"defaultUrl['\"]?\s*,\s*['\"]([^'\"]+)", body or "", re.I):
+            if "pdf" in match.group(1).lower():
+                cands.append(match.group(1))
     # 去重+规范化
     out: list[str] = []
     seen = set()
-    scheme = re.match(r"^(https?://[^/]+)", page_url)
-    base = scheme.group(1) if scheme else ""
     for u in cands:
         u = u.strip().lstrip("\"'")
-        if u.startswith("//"):
-            u = "https:" + u
-        elif u.startswith("/"):
-            if base:
-                u = base + u
+        u = urljoin(page_url, u)
         if u not in seen and u:
             seen.add(u)
             out.append(u)
