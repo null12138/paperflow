@@ -30,7 +30,7 @@ import requests
 from ..schools import DEFAULT_KEY, get_school, search_schools
 
 log = logging.getLogger(__name__)
-SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"
+SESSIONS_DIR = Path(__file__).resolve().parent.parent.parent / "sessions"
 SESSION_FILE = SESSIONS_DIR / "webvpn.json"
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -77,6 +77,28 @@ def convert_url(url: str, webvpn_base: str, key: bytes = DEFAULT_KEY,
     return result
 
 
+def convert_url_cn(url: str, webvpn_base: str) -> str:
+    """Rails 型 WebVPN（/users/sign_in 登录）的明文转发 URL。
+
+    常见格式：<base>/https/<目标host>/<path>，scheme 跟随 url。
+    登录 cookie 由会话文件携带，不依赖 AES 密钥。
+    """
+    parsed = urllib.parse.urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        return url
+    scheme = parsed.scheme.lower()
+    result = f"{webvpn_base.rstrip('/')}/{scheme}/{hostname}{parsed.path}"
+    if parsed.query:
+        result += f"?{parsed.query}"
+    return result
+
+
+def detect_webvpn_type(session: dict) -> str:
+    """从会话信息判断 WebVPN 类型：AES 加密式 vs Rails 明文式。"""
+    return (session.get("type") or "webvpn").lower()
+
+
 # --------------------------------------------------------------------------
 # 会话读写（沿用 auth 模块的 sessions/ 约定）
 # --------------------------------------------------------------------------
@@ -96,10 +118,11 @@ def load_session() -> dict:
 
 
 def save_session(school: str, host: str, key: str, iv: str,
-                 cookies: list[dict]) -> None:
+                 cookies: list[dict], school_type: str = "webvpn") -> None:
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     data = {"school": school, "host": host, "key": key, "iv": iv,
-            "cookies": cookies, "storage": {}, "saved_at": time.strftime("%Y-%m-%d %H:%M")}
+            "type": school_type, "cookies": cookies, "storage": {},
+            "saved_at": time.strftime("%Y-%m-%d %H:%M")}
     SESSION_FILE.write_text(json.dumps(data, indent=1, ensure_ascii=False),
                             encoding="utf-8")
 
@@ -186,9 +209,12 @@ class WebVpnEngine:
         host = (data.get("host") or "").rstrip("/")
         if not cookies or not host:
             return "none"
-        key = (data.get("key") or "wrdvpnisthebest!").encode("utf-8")
-        iv = (data.get("iv") or key).encode("utf-8") if data.get("iv") else key
-        probe = convert_url("https://www.nature.com", host, key, iv)
+        if detect_webvpn_type(data) == "webvpn_cn":
+            probe = convert_url_cn("https://www.nature.com", host)
+        else:
+            key = (data.get("key") or "wrdvpnisthebest!").encode("utf-8")
+            iv = (data.get("iv") or key).encode("utf-8") if data.get("iv") else key
+            probe = convert_url("https://www.nature.com", host, key, iv)
         try:
             s = requests.Session()
             s.trust_env = False
@@ -214,6 +240,7 @@ class WebVpnEngine:
 
         key = (data.get("key") or "wrdvpnisthebest!").encode("utf-8")
         iv = (data.get("iv") or "wrdvpnisthebest!").encode("utf-8")
+        vpn_type = detect_webvpn_type(data)
 
         resolved = _resolve_doi(doi)
         if not resolved:
@@ -225,7 +252,10 @@ class WebVpnEngine:
         for url in candidates:
             if not url:
                 continue
-            ok, detail = self._http_get_pdf(url, target, host, key, iv, cookies)
+            if vpn_type == "webvpn_cn":
+                ok, detail = self._http_get_pdf_cn(url, target, host, cookies)
+            else:
+                ok, detail = self._http_get_pdf(url, target, host, key, iv, cookies)
             if ok:
                 return True, f"webvpn → {detail}"
             log.debug("webvpn http fail: %s", detail)
@@ -239,6 +269,38 @@ class WebVpnEngine:
             log.debug("webvpn browser fail: %s", exc)
 
         return False, "webvpn: HTTP 与浏览器通道均未取得 PDF（检查会话是否过期/机构是否有权限）"
+
+    def _http_get_pdf_cn(self, url: str, target: Path, host: str,
+                         cookies: list[dict]) -> tuple[bool, str]:
+        """Rails 型 WebVPN：明文转发 + 会话 cookie 直取。"""
+        proxied = convert_url_cn(url, host)
+        s = requests.Session()
+        s.trust_env = False
+        s.headers["User-Agent"] = UA
+        _cookie_jar(s, cookies)
+        try:
+            r = s.get(proxied, timeout=self.timeout, allow_redirects=True, stream=True)
+        except requests.RequestException as exc:
+            return False, f"HTTP {type(exc).__name__}"
+        if r.status_code >= 400:
+            r.close()
+            return False, f"HTTP {r.status_code}"
+        first = next(r.iter_content(chunk_size=8192), b"")
+        if not first.startswith(b"%PDF-"):
+            r.close()
+            return False, "非 PDF 响应"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(target.suffix + ".part")
+        try:
+            with tmp.open("wb") as fh:
+                fh.write(first)
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        fh.write(chunk)
+            tmp.replace(target)
+        finally:
+            r.close()
+        return True, url[:80]
 
     def _http_get_pdf(self, url: str, target: Path, host: str, key: bytes,
                       iv: bytes, cookies: list[dict]) -> tuple[bool, str]:
@@ -363,29 +425,25 @@ def webvpn_login(school: str, headful: bool = True, timeout: int = 600) -> bool:
     entry = get_school(school)
     key = entry.key.decode("utf-8")
     iv = entry.iv.decode("utf-8")
+    school_type = entry.school_type or "webvpn"
 
-    from playwright.sync_api import sync_playwright
+    from .. import auth as _auth
 
-    with sync_playwright() as p:
-        try:
-            browser = p.chromium.launch(headless=False, args=[
-                "--disable-blink-features=AutomationControlled", "--no-first-run"])
-        except Exception:
-            browser = p.chromium.launch(headless=False)
-        ctx = browser.new_context(user_agent=UA, locale="zh-CN",
-                                  viewport={"width": 1440, "height": 900})
-        page = ctx.new_page()
-        try:
-            page.goto(entry.host, wait_until="domcontentloaded", timeout=60000)
-        except Exception as exc:
-            print(f"  打开 {entry.host} 失败: {exc}")
-        print(f"\n  已打开 {entry.school} 的 WebVPN（{entry.host}）")
-        print("  请在浏览器中完成 CAS/SSO 登录（校园账号/统一身份认证）。")
+    _p, browser, ctx = _auth._launch_browser(headful=headful)
+    page = ctx.new_page()
+    try:
+        page.goto(entry.host, wait_until="domcontentloaded", timeout=60000)
+    except Exception as exc:
+        print(f"  打开 {entry.host} 失败: {exc}")
+
+    if school_type == "webvpn_cn":
+        print(f"\n  已打开 {entry.name} 的 WebVPN（{entry.host}）")
+        print("  请在浏览器中填入 学号/工号 + 密码（如有验证码也请填写）完成登录。")
         print("  脚本会自动检测登录态并保存会话…\n")
+        login_paths = ("/users/sign_in", "/login", "/authserver", "/cas", "/sso")
 
-        def _login_redirect(url_low: str) -> bool:
-            return any(x in url_low for x in ("/login", "cas", "sso", "/authserver",
-                                              "wayf", "saml", "idp"))
+        def _on_login_page(url: str) -> bool:
+            return any(p in url for p in login_paths)
 
         deadline = time.time() + timeout
         saved = False
@@ -394,13 +452,14 @@ def webvpn_login(school: str, headful: bool = True, timeout: int = 600) -> bool:
             try:
                 if page.is_closed():
                     break
-                current = page.url.lower()
+                url = page.url
                 cookies = ctx.cookies()
-                # 离开登录页且已有明显登录 cookie（>4 个）即视为成功
-                if not _login_redirect(current) and len(cookies) > 4:
+                # 离开登录页 + cookie 明显增多 → 登录成功
+                if not _on_login_page(url) and len(cookies) > 5:
                     time.sleep(2)
                     cookies = ctx.cookies()
-                    save_session(entry.name, entry.host, key, iv, cookies)
+                    save_session(entry.name, entry.host, key, iv, cookies,
+                                 school_type=school_type)
                     print(f"  ✓ 登录成功，已保存 {len(cookies)} 个 cookie 到 "
                           f"sessions/webvpn.json")
                     saved = True
@@ -413,7 +472,52 @@ def webvpn_login(school: str, headful: bool = True, timeout: int = 600) -> bool:
             browser.close()
         except Exception:
             pass
+        try:
+            _p.stop()
+        except Exception:
+            pass
         return saved
+
+    # ---- 原有：CAS/SSO 型 WebVPN（AES 转发） ----
+    print(f"\n  已打开 {entry.school} 的 WebVPN（{entry.host}）")
+    print("  请在浏览器中完成 CAS/SSO 登录（校园账号/统一身份认证）。")
+    print("  脚本会自动检测登录态并保存会话…\n")
+
+    def _login_redirect(url_low: str) -> bool:
+        return any(x in url_low for x in ("/login", "cas", "sso", "/authserver",
+                                          "wayf", "saml", "idp"))
+
+    deadline = time.time() + timeout
+    saved = False
+    while time.time() < deadline:
+        time.sleep(3)
+        try:
+            if page.is_closed():
+                break
+            current = page.url.lower()
+            cookies = ctx.cookies()
+            # 离开登录页且已有明显登录 cookie（>4 个）即视为成功
+            if not _login_redirect(current) and len(cookies) > 4:
+                time.sleep(2)
+                cookies = ctx.cookies()
+                save_session(entry.name, entry.host, key, iv, cookies)
+                print(f"  ✓ 登录成功，已保存 {len(cookies)} 个 cookie 到 "
+                      f"sessions/webvpn.json")
+                saved = True
+                break
+        except Exception:
+            continue
+    if not saved:
+        print("  超时或未检测到登录态，未保存会话。")
+    try:
+        browser.close()
+    except Exception:
+        pass
+    try:
+        _p.stop()
+    except Exception:
+        pass
+    return saved
 
 
 def show_schools(query: str = "") -> None:

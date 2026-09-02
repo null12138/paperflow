@@ -101,8 +101,8 @@
       "host": "myvpn.ncepu.edu.cn"
     },
     "首都师范大学": {
-      "host": "https://vpn.cnu.edu.cn",
-      "type": "sangfor"
+      "host": "https://v.cnu.edu.cn",
+      "type": "webvpn_cn"
     }
   },
   "福建": {
