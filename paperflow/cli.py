@@ -94,12 +94,33 @@ def cmd_download(args: argparse.Namespace) -> int:
         use_webvpn="webvpn" in args.mode,
         use_carsi="carsi" in args.mode,
         carsi_idp=args.idp or os.getenv("PAPERFLOW_CARSI_IDP", ""),
+        use_browser="browser" in args.mode,
         use_cnki="cnki" in args.mode,
     )
     ok_count = fail_count = 0
     t0 = time.time()
     failed_path = Path(args.failed)
     with PaperDatabase(args.db) as database:
+        # --url-file：直接给出版社网址/DOI，走浏览器操作通道（适合校园网）
+        if args.url_file:
+            from .pdf.agentbrowser import AgentBrowserEngine
+            urls = [u.strip() for u in args.url_file.read_text().splitlines() if u.strip()]
+            eng = AgentBrowserEngine()
+            for i, raw in enumerate(urls, 1):
+                doi = eng._extract_doi(raw) if raw.lower().startswith("http") else raw
+                paper = Paper(title=raw, doi=doi or None, sources={"browser"})
+                ok, info = eng.fetch(raw, engine._target_path(paper))
+                database.save_download(paper, ok, info, args.keyword)
+                if ok:
+                    ok_count += 1
+                    print(f"[{i}/{len(urls)}] OK {raw[:60]} | {info[:60]}", flush=True)
+                else:
+                    fail_count += 1
+                    with failed_path.open("a", encoding="utf-8") as f:
+                        f.write(f"{raw}	{info}\n")
+                    print(f"[{i}/{len(urls)}] FAIL {raw[:60]} | {info[:80]}", flush=True)
+            print(f"\n完成: 成功 {ok_count} / 失败 {fail_count} / {len(urls)} / 用时 {time.time()-t0:.0f}s；数据库: {args.db}")
+            return 0
         for i, (doi, title) in enumerate(items, 1):
             paper = Paper(title=title or doi, doi=doi, sources={"manual"})
             ok, info = engine.fetch(paper)
@@ -466,10 +487,11 @@ def main(argv: list[str] | None = None) -> int:
     p_s.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径")
     p_s.set_defaults(fn=cmd_search)
 
-    p_d = sub.add_parser("download", help="按 DOI 清单批量下载 PDF")
-    p_d.add_argument("--doi-file", type=Path, required=True)
+    p_d = sub.add_parser("download", help="按 DOI/URL 清单批量下载 PDF")
+    p_d.add_argument("--doi-file", type=Path, required=False, help="DOI 清单文件（每行一个 DOI），缺省时需 --url-file")
+    p_d.add_argument("--url-file", type=Path, default=None, help="出版社文章 URL/DOI 清单（每行一个），走浏览器操作通道，适合校园网内")
     p_d.add_argument("--out", type=Path, default=Path("downloads"))
-    p_d.add_argument("--mode", default="scihub+oa", help="可组合: cnki, scihub, oa, publisher, webvpn, carsi（逗号或+分隔）")
+    p_d.add_argument("--mode", default="scihub+oa", help="可组合: cnki, scihub, oa, publisher, webvpn, carsi, browser（逗号或+分隔）")
     p_d.add_argument("--idp", default="", help="CARSI 学校名（如 首都师范大学）")
     p_d.add_argument("--rpm", type=int, default=30, help="下载限速（篇/分钟），稳定优先")
     p_d.add_argument("--limit", type=int, default=0)

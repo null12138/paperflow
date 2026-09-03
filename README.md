@@ -302,6 +302,24 @@ paperflow download-db --db paperflow.db --mode oa+scihub+carsi \
 `sessions/carsi_<publisher>.json` → 经会话抓取出版社 PDF 直链（响应捕获/直链构造/点击 PDF
 按钮）→ 校验 `%PDF-` 落盘。出版社识别按 DOI 前缀映射（不依赖可能超时的网络解析）。
 
+### 11. 浏览器操作通道（校园网内，给出出版社网址直接下）
+
+在**校园网/机构网络内**（出口 IP 自带订阅授权，无需登录），直接把出版社文章
+URL 列表交给 browser 通道，Playwright 打开页面（等待 Cloudflare 放行者自动静待）
+→ 网络响应捕获 / 出版社 PDF 直链 / 页面找链接或点击 PDF 按钮 → 校验 `%PDF-` 落盘：
+
+```bash
+# urls.txt 每行一个文章 URL 或 DOI
+python -m paperflow.cli download --url-file urls.txt --out downloads \
+    --db paperflow.db --rpm 6 --keyword "校园网"
+# 或作为通道之一组合进普通下载（DOI 走 Browser 兜底）
+python -m paperflow.cli download --doi-file doi_list.txt --out downloads \
+    --mode oa+scihub+publisher+browser --rpm 10
+```
+
+实现（`paperflow/pdf/agentbrowser.py`）：与 CARSI 共享同一套出版社 PDF 直链规则；
+CF 交互式挑战无法自动通过时如实提示换节点/人工。适合 AI 拿到文章页地址后自动取全文。
+
 ## 代码结构
 
 ```
@@ -315,12 +333,14 @@ paperflow/
   database.py         SQLite schema、候选队列、JIF 匹配、查询与迁移
   sources/            元数据源适配器（注册表模式，可插拔增删）
     wos.py  pubmed_crossref_s2.py  cnki.py
-  pdf/                PDF 引擎：依次尝试 CNKI → Sci-Hub → OA → 出版社 → WebVPN
+  pdf/                PDF 引擎：依次尝试 CNKI → Sci-Hub → OA → 出版社 → WebVPN → CARSI
     cnki.py           CNKI 机构会话 + 浏览器下载事件 + PDF 校验
     scihub.py         altcha 求解 + DDoS-Guard 会话
     oa.py             Unpaywall / PMC
     publisher.py      出版社订阅适配（带浏览器授权登录态）
-    webvpn.py         高校 WebVPN + CAS 机构通道（AES 转发 URL + 会话复用）
+    webvpn.py         高校 WebVPN 机构通道（AES 转发 URL + 会话复用）
+    carsi.py          CARSI 联邦认证机构通道（CAS 登录，无 VPN）
+    agentbrowser.py   浏览器操作通道（给 URL/DOI，校园网内直接取 PDF）
   schools.py          高校 WebVPN 学校数据库（data/webvpn.json）
   legacy/             旧版独立脚本（wos_species_downloader 等，保留可参考）
 tests/                主包的离线单元测试
