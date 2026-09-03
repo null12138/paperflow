@@ -278,14 +278,6 @@ paperflow download-db --db paperflow.db --mode oa+scihub+webvpn --status failed 
 
   登录成功后会话保存到 `sessions/webvpn.json`；`auth status webvpn` 探测会话状态。
 
-兼容两类 WebVPN：
-* **AES 转发型**（默认，`webvpn.*` 域名）：上述加密路径。
-* **Rails 登录型**（`type: "webvpn_cn"`，如首都师大 `https://v.cnu.edu.cn`，登录页为
-  `/users/sign_in`）：登录后按 `https://<host点转横杠>-<端口>.v.cnu.edu.cn/<路径>` 明文子域
-  转发。⚠ **实验性（未验证通过）**：首师大条目实测登录 OK（cookie 有效、主页可显示用户名），
-  但转发访问反复被 302 → `/vpn_key/update` 弹回主页——疑似会话与浏览器指纹绑定等安全机制，
-  自动化与 requests 均无法放行。不要把它当作可用通道；首师大付费墙文献请走 CARSI 或人工下载。
-
 ### 10. CARSI 机构认证通道（校外免 VPN）
 
 CARSI（高校身份认证联盟，Shibboleth/SAML 联邦）让**校外用户用自己的学校 CAS 统一认证直接

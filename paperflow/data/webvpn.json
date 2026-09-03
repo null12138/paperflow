@@ -99,11 +99,6 @@
     },
     "华北电力大学": {
       "host": "myvpn.ncepu.edu.cn"
-    },
-    "首都师范大学": {
-      "host": "https://v.cnu.edu.cn",
-      "type": "webvpn_cn",
-      "note": "实验性：登录已验证，转发放行被浏览器指纹绑定拦截，自动化不可用；建议走 CARSI"
     }
   },
   "福建": {
