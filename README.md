@@ -276,6 +276,37 @@ paperflow download-db --db paperflow.db --mode oa+scihub+webvpn --status failed 
 出版社 PDF 直链并校验 `%PDF-` 头；HTTP 通道失败时自动险底到可见浏览器（监听 PDF 响应 /
 触发下载）。会话保存在 `sessions/webvpn.json`（学校、入口、密钥、cookie）。
 
+兼容两类 WebVPN：
+* **AES 转发型**（默认，`webvpn.*` 域名）：上述加密路径；
+* **Rails 登录型**（`type: "webvpn_cn"`，如首都师大 `https://v.cnu.edu.cn`，登录页为
+  `/users/sign_in`）：登录后按 `https://<host点转横杠>-<端口>.v.cnu.edu.cn/<路径>` 明文子域
+  转发。首次访问外部域会 302 到 `/vpn_key/update` 种 `_webvpn_key` JWT，需浏览器/JS 环境
+  （部分门户还会将会话与浏览器指纹绑定，自动化受阻时以浏览器人工下载兜底）。
+
+### 10. CARSI 机构认证通道（校外免 VPN）
+
+CARSI（高校身份认证联盟，Shibboleth/SAML 联邦）让**校外用户用自己的学校 CAS 统一认证直接
+登录出版社**，无需 VPN。支持 Wiley/ACS/ScienceDirect/Springer/Nature/T&F/IEEE/Oxford/
+RoyalSociety/SAGE/ASCE（`paperflow/pdf/carsi.py`，登录思路借鉴 scansci-pdf，Apache-2.0）。
+
+```bash
+# 1) 每家出版社登录一次（弹浏览器 → 搜学校 → 学校 CAS → 自动保存会话）
+paperflow auth login carsi --school 首都师范大学 --publisher wiley
+paperflow auth login carsi --school 首都师范大学 --publisher acs
+
+# 2) 下载时加 carsi 通道 + --idp 学校名（或环境变量 PAPERFLOW_CARSI_IDP）
+paperflow download --doi-file rest.txt --out downloads \
+    --mode oa+scihub+carsi --idp 首都师范大学 --rpm 10
+paperflow download-db --db paperflow.db --mode oa+scihub+carsi \
+    --status failed --limit 0 --out downloads
+```
+
+流程：打开文章页（先让 Cloudflare 放行）→ 找 "Access through your institution" SSO 链接
+→ WAYF 机构搜索（`Capital Normal` 等英文名，`paperflow/pdf/carsi.py` 内建 IDP 映射）→
+学校 CAS（用户输入学号密码，工具不接触）→ 认证回跳后保存 publisher cookie 到
+`sessions/carsi_<publisher>.json` → 经会话抓取出版社 PDF 直链（响应捕获/直链构造/点击 PDF
+按钮）→ 校验 `%PDF-` 落盘。出版社识别按 DOI 前缀映射（不依赖可能超时的网络解析）。
+
 ## 代码结构
 
 ```
