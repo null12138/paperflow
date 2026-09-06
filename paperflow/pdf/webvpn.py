@@ -27,10 +27,11 @@ from pathlib import Path
 
 import requests
 
+from ..paths import data_path
 from ..schools import DEFAULT_KEY, get_school, search_schools
 
 log = logging.getLogger(__name__)
-SESSIONS_DIR = Path(__file__).resolve().parent.parent.parent / "sessions"
+SESSIONS_DIR = data_path("sessions")
 SESSION_FILE = SESSIONS_DIR / "webvpn.json"
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}PaperFlow · AI 接口{% endblock %}
+{% block content %}
+<section class="hero" aria-labelledby="ai-title">
+  <div class="eyebrow"><span></span> AI RESEARCH API</div>
+  <h1 id="ai-title">让 AI <em>查论文、下全文。</em></h1>
+  <p>所有接口返回 JSON，任务支持后台运行。使用当前网站的 Basic Auth 凭据即可访问。</p>
+</section>
+<section class="workflow-card">
+  <h2>调用流程</h2><p>GET /api/v1/papers 查询已有文献库。发现新论文请 POST 创建 metadata 任务，收到 202 后每 5 秒查询任务状态，直到 succeeded、failed 或 cancelled。成功后使用原关键词查询文献库；结果来自共享文献库，不是任务独占结果。DOI 下载任务成功后，读取 archive_url 下载压缩包；论文详情的 pdf_url 可下载单篇 PDF。所有文件请求也需要认证。</p><p>机器客户端发送 application/json 和 Basic Authorization，无需 Cookie 或 CSRF token，请勿发送 Origin 或 Sec-Fetch-Site。浏览器请求仍需网页 CSRF token。limit 默认 0 表示不限量，建议首次设为 20。Europe PMC 检索可索引的全文（含正文与文后内容），WOS 与 PubMed 补充元数据检索；不覆盖所有付费正文，检索成功不保证每篇均能获取全文。</p><h2>接口速览</h2>
+  <pre><code>GET  /api/v1
+GET  /api/v1/papers?q=climate&amp;limit=20
+GET  /api/v1/papers/&lt;paper_id&gt;
+POST /api/v1/jobs
+GET  /api/v1/jobs/&lt;job_id&gt;
+GET  /api/v1/jobs/&lt;job_id&gt;/archive</code></pre>
+  <h2>创建检索任务</h2>
+  <pre><code>curl -u USER:PASSWORD -X POST {{ request.url_root.rstrip('/') }}/api/v1/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"workflow":"metadata","items":["Ginkgo biloba"],"limit":20}'</code></pre>
+  <h2>创建 DOI 下载任务</h2>
+  <pre><code>{"workflow":"download","mode":"doi","items":["10.1000/example"]}</code></pre>
+  <p><a class="primary-button" href="{{ url_for('api_v1_docs') }}">查看机器可读 API 文档 →</a></p>
+</section>
+{% endblock %}

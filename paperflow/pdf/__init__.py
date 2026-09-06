@@ -97,6 +97,30 @@ class PdfEngine:
     def _target_path(self, paper: Paper) -> Path:
         return self.out / paper_filename(paper)
 
+    def storage_available(self) -> bool:
+        try:
+            minimum_free = max(0.5, float(os.getenv("PAPERFLOW_MIN_FREE_GB", "3")))
+        except ValueError:
+            minimum_free = 3.0
+        storage_paths = [self.out]
+        local_storage = os.getenv("PAPERFLOW_LOCAL_DISK_PATH", "").strip()
+        if local_storage:
+            storage_paths.append(Path(local_storage))
+        return all(
+            not path.exists() or shutil.disk_usage(path).free >= minimum_free * 1024 ** 3
+            for path in storage_paths
+        )
+
+    def wait_for_storage(self, progress=None) -> None:
+        """Pause on local cache pressure without turning queued papers into failures."""
+        interval = max(5, int(os.getenv("PAPERFLOW_STORAGE_WAIT_SECONDS", "30")))
+        announced = False
+        while not self.storage_available():
+            if progress and not announced:
+                progress("本地缓存正在同步，空间恢复后会自动继续")
+                announced = True
+            time.sleep(interval)
+
     def _fetch_direct_candidate(self, url: str, target: Path) -> tuple[bool, str]:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -156,14 +180,7 @@ class PdfEngine:
 
     def fetch(self, paper: Paper) -> tuple[bool, str]:
         """下载单篇论文全文；返回 (成功?, 说明)。"""
-        try:
-            minimum_free = max(0.5, float(os.getenv("PAPERFLOW_MIN_FREE_GB", "3")))
-        except ValueError:
-            minimum_free = 3.0
-        if shutil.disk_usage(self.out).free < minimum_free * 1024 ** 3:
-            paper.failure_reason = f"磁盘剩余空间不足 {minimum_free:g} GB，已停止写入"
-            paper.download_detail = paper.failure_reason
-            return False, paper.failure_reason
+        self.wait_for_storage()
         target = self._target_path(paper)
         if pdf_ok(target):
             paper.downloaded_path = str(target)

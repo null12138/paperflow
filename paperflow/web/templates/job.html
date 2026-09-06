@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}任务 #{{ job.id }} · Paperflow{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('jobs') }}">← 返回任务列表</a>
+<section class="job-hero" id="job-view" data-api-url="{{ url_for('api_job', job_id=job.id) }}">
+  <div><p class="eyebrow">Job #{{ job.id }}</p><h1>{{ job_labels.get(job.kind, job.kind) }}</h1><p id="job-message">{{ job.message or '等待执行' }}</p></div>
+  <span id="job-status" class="badge large {{ job.status }}">{{ {'succeeded':'完成','running':'运行中','queued':'排队中','failed':'失败','cancelled':'已取消'}.get(job.status, job.status) }}</span>
+</section>
+<div class="meta-grid compact"><div><span>创建</span><strong>{{ job.created_at }}</strong></div><div><span>开始</span><strong>{{ job.started_at or '-' }}</strong></div><div><span>结束</span><strong>{{ job.finished_at or '-' }}</strong></div><div><span>自动续跑</span><strong>{{ job.resume_count }} 次</strong></div></div>
+{% if job.kind == 'download_list' or archive_ready %}<div class="callout"><span>任务文件</span>{% if job.kind == 'download_list' %}<a class="button" href="{{ url_for('publisher_links', job_id=job.id) }}">查看未下载 DOI / 出版社链接</a>{% endif %}{% if archive_ready %}<a class="button primary" href="{{ url_for('download_archive', job_id=job.id) }}">下载任务 ZIP</a>{% endif %}</div>{% endif %}
+{% if job.txt_ready %}<a class="button primary" href="{{ job.txt_url }}">下载检索结果 TXT</a>{% endif %}<section class="panel"><div class="section-head"><h2>任务操作</h2><div class="actions">{% if archive_ready %}<a class="button primary" href="{{ url_for('download_archive', job_id=job.id) }}">下载 PDF 压缩包</a>{% endif %}{% if job.status in ['queued','running'] %}<form method="post" action="{{ url_for('cancel_job', job_id=job.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button danger" type="submit">取消任务</button></form>{% elif job.status in ['failed','cancelled'] %}<form method="post" action="{{ url_for('retry_job', job_id=job.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button primary" type="submit">重新运行</button></form>{% endif %}</div></div></section>
+<section class="panel terminal-panel"><div class="section-head"><div><p class="eyebrow">PROGRESS</p><h2>处理记录</h2></div><span class="live-dot"></span></div><pre id="job-log" class="terminal">{{ log or '任务开始后会显示处理进度。' }}</pre></section>
+{% endblock %}

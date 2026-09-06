@@ -1,364 +1,280 @@
-# paperflow — 物种文献检索与 PDF 批量下载
+# Paperflow
 
-按物种拉丁名（或 DOI 清单）从多数据源检索论文元数据，并尽可能下载 PDF 全文。
+自托管的论文检索、文献库和 PDF 下载工具。提供 Web 页面、持久化后台任务、JSON API 与命令行。
 
-检索和下载结果默认增量写入 SQLite 数据库 `paperflow.db`。原有 TXT 报告仍会生成，便于直接查看和兼容旧流程。
+**服务器发行版：0.9.0。** 适合在自己的 Linux VPS 上运行；使用本地 SQLite 保存论文和任务，关闭网页后任务继续执行。
 
-## 数据源架构
+## 功能
 
-| 用途 | 来源 | 状态 |
-|---|---|---|
-| 元数据检索 | **WOS Starter API**（官方 API，分页/断点/配额） | ✅ |
-| | **PubMed / Europe PMC** | ✅ |
-| | **Crossref** | ✅ |
-| | **Semantic Scholar (S2)** | ✅ |
-| | **CNKI** | ✅ 内置 Playwright；首次使用需 `paperflow auth login cnki` |
-| PDF 下载 | **Sci-Hub**（altcha 验证码自动求解 + DDoS-Guard 会话） | ✅ |
-| | **Unpaywall / PMC / Europe PMC**（开放获取） | ✅ |
-| | **CNKI PDF**（复用已保存的机构会话，点击站内授权下载） | ✅ |
-| | **出版社订阅适配器**（Elsevier/Springer/Wiley/Oxford/Nature/T&F/AAAS…） | 🔧 需先 `auth login` 对应站点 |
+- 网页提交关键词或 DOI，检索题名、作者、期刊、年份、摘要等信息。
+- 默认关键词来源：**WOS + PubMed + Europe PMC**。Europe PMC 查询其可索引的全文，包括正文、文后内容；WOS 和 PubMed 补充元数据检索。不等于搜索所有出版商的全部付费正文。
+- Crossref、Semantic Scholar（S2）适配器可通过命令行显式指定。分页代码支持继续取回结果；`limit=0` 不设应用层总篇数上限，但仍受来源覆盖、接口配额和实际响应限制。
+- 文献入库去重、关键词分类、下载结果追踪。文献库可查题名、DOI、期刊、摘要、关键词和来源。
+- 只检索任务输出 TXT；下载任务生成按任务、关键词分类的 ZIP。
+- AI 接口使用 HTTP Basic Auth；可创建任务、查询状态、检索文献库、下载单篇 PDF 或 ZIP。
+- 影响因子从导入的 CSV/TSV 存入 SQLite，按期刊关联到论文。**本版本不提供自动抓取 JCR 或逐篇在线查询影响因子。**
 
-> CNKI 与付费墙出版社在无公开 API 的前提下，通过**浏览器授权登录**（学校账号/机构 SSO）后以站点会话访问，不依赖 Kimi WebBridge 等外部扩展。WOS 授权下载使用 Selenium 有头 Chrome；首次运行需手动完成 SSO/Robot，登录态保存在本机浏览器 profile。CNKI 会分页抓取列表，并以每秒最多 1 篇的速度补摘要详情。
+## 服务器部署指南
 
-## 安装（全新系统）
+### 1. 准备服务器
 
-```bash
-# macOS / Linux
-bash install.sh          # 自动建 .venv、装依赖、装 playwright chromium、生成 .env、自检
-source .venv/bin/activate
-paperflow doctor         # 随时自检：依赖/浏览器/代理/授权
+部署脚本支持 **Ubuntu / Debian + systemd + Python 3.10 或更新版本**；推荐 Ubuntu 24.04 / Python 3.12。
 
-# Windows
-install.bat
-```
-
-也可手动：
+建议预留至少 2 GB 内存和 10 GB 可用磁盘。实际需要取决于论文大小：PDF 和 ZIP 会同时占空间，不能仅按论文篇数估算。下载默认在可用空间低于 3 GB 时等待；**打包仍需要额外临时空间**。
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -e .
-playwright install chromium
+sudo apt-get update
+sudo apt-get install -y python3 python3-venv python3-pip curl ca-certificates git
 ```
 
-> 依赖 Playwright 浏览器（CNKI 等授权流程）和 Selenium 管理的 Chrome（WOS 授权下载）。
+源码安装需要联网获取 Python 依赖。发布包包含源码和部署脚本，不包含 Python、操作系统包、浏览器二进制或完整离线依赖。
 
-可选环境变量（`.env.example` 有清单）：
+### 2. 获取发行版并安装
+
+从 [Releases](https://github.com/null12138/paperflow/releases) 下载 `paperflow-web-0.9.0.tar.gz`，上传到服务器后：
 
 ```bash
-export UNPAYWALL_EMAIL='你的真实邮箱'   # Unpaywall/NCBI 要求
-export NCBI_EMAIL='你的真实邮箱'
-export WOS_API_KEY='...'               # WOS 官方 Starter API；只写入本机 .env
-export S2_API_KEY='...'                # 可提高 Semantic Scholar 配额
-export ELSEVIER_API_KEY='...'          # Elsevier Article Retrieval API（需相应访问权限）
-export ELSEVIER_INSTTOKEN='...'        # 可选：机构令牌
-export SPRINGER_NATURE_API_KEY='...'   # Springer Nature OpenAccess API（仅 OA 内容）
+tar -xzf paperflow-web-0.9.0.tar.gz
+cd paperflow-web-0.9.0
+sudo bash deploy/server/install.sh
 ```
 
-S2 未配置 Key 时使用匿名配额，触发 HTTP 429 属于接口限流，不会影响其他数据源；在 `.env` 配置个人 `S2_API_KEY` 后重新检索即可。界面会显示简短的中文提示，不会输出完整请求 URL。
-
-Semantic Scholar 请求在适配器内部统一限制为每秒最多 1 次，即使多个关键词并行检索也不会突破该频率。
-
-ScienceDirect/Elsevier 下载：启用 `publisher` 通道后，DOI 为 `10.1016/...` 的文章会优先调用 Elsevier Article Retrieval API，并校验返回的 PDF 文件头；API 返回权限错误或非 PDF 时自动回退到出版社页面解析。API Key 不绕过机构订阅或反机器人验证。
-
-WOS 授权下载：`download-db --mode authorized` 会使用已登录的真实浏览器，按 DOI 通过 WOS 官方记录页跳转到授权的全文提供方，再模拟点击各出版社的 PDF 控件。内置 Springer/BMC、Elsevier、Wiley、Oxford、Nature、Taylor & Francis、SAGE、MDPI、PLOS、IEEE、ACS、RSC、BMJ、APS、AIP、ACM、Cambridge、Cell、Frontiers、Hindawi、Thieme、Emerald、De Gruyter、Karger、LWW、JSTOR、BioOne、SciELO 等适配器，并保留通用 `Download PDF` 文本兜底。`authorized` 只使用用户已有机构访问权限，不绕过登录、验证码或付费墙。
-
-Springer Nature 下载：配置 `SPRINGER_NATURE_API_KEY` 后，Springer/ BioMed Central 等 DOI 会先查询 Springer Nature OpenAccess API，找到 OA PDF 才下载；付费文章仍回退 SpringerLink 机构授权。
-
-## 使用
-
-### TUI 全屏界面
-
-安装后直接运行：
+也可以克隆源码：
 
 ```bash
-paperflow tui
-# 或指定另一个数据库
-paperflow tui --db data/my-papers.db
+git clone --branch v0.9.0 --depth 1 https://github.com/null12138/paperflow.git
+cd paperflow
+sudo bash deploy/server/install.sh
 ```
 
-TUI 包含六个页面：
+脚本会创建 `paperflow` 系统用户、独立虚拟环境和两个 systemd 服务，自动生成随机登录密码及会话密钥。
 
-- **概览**：文章、PDF、待下载、候选和影响因子匹配统计；
-- **文献库**：按关键词、来源、下载状态和影响因子范围查询；
-- **检索**：只获取元数据并写入 SQLite，不触发下载；
-- **WOS批量**：官方 Starter API 分页获取，实时显示进度/当日配额并支持断点续传；
-- **下载队列**：稍后从数据库恢复候选并批量下载；
-- **影响因子**：导入正式 JIF CSV/TSV 并立即刷新匹配结果。
-
-联网检索、CNKI 浏览器和下载都在后台 worker 中执行，界面不会冻结。按 `r` 刷新，按 `q` 退出；长任务执行时请等待完成后再退出，已有数据库记录不会被删除。
-
-推荐的 TUI 两步流程：进入“检索”页，在 `input.txt` 路径旁点击“导入 TXT”（每行一个关键词），勾选需要的数据源后点击“开始检索”；检索结束后进入“下载队列”，按关键词或元数据来源筛选，选择 PDF 通道并点击“开始下载”。检索和下载彼此独立，任何一步中断都可以稍后从 SQLite 继续。
-
-如需清空数据，在“概览”页点击“清空数据库”，二次确认后执行。程序会先复制出 `*.before-clear-YYYYMMDD-HHMMSS.db.bak` 备份，再清除业务数据并保留数据库表结构。
-
-### 1. 授权（一次性，分发版核心）
-
-```bash
-python -m paperflow.cli auth login cnki          # 弹出浏览器 → 手动登录（校园账号）→ 回车
-python -m paperflow.cli auth login sciencedirect # 出版社订阅
-python -m paperflow.cli auth login scihub        # 自动模式（DDoS-Guard 挑战自动等待）
-python -m paperflow.cli auth status              # 查看各站点授权状态
-```
-
-登录态保存在 `sessions/<站点>.json`，仅本机使用，请勿提交到版本库。
-
-CNKI 首次配置及验证：
-
-```bash
-paperflow auth login cnki
-# 在弹出的浏览器完成机构登录，保持页面打开，回终端按回车保存
-paperflow search --species "银杏" --sources CNKI --limit 5
-# 检索并下载当前机构有权限的 CNKI PDF
-printf '银杏\n' > input.txt
-paperflow run --input input.txt --sources CNKI --out cnki_downloads --mode cnki --limit 1
-```
-
-默认使用可见浏览器，便于处理正常登录或验证码。已有稳定会话后可设置 `CNKI_HEADLESS=1`；如只要列表、不补详情摘要，可设置 `CNKI_FETCH_ABSTRACTS=0`。
-
-### 2. 检索元数据
-
-```bash
-# 指定物种 + 数据源
-python -m paperflow.cli search --input input.txt --sources PubMed,Crossref,S2 --limit 20
-# 结果写到 paperflow.db，同时保留 papers_meta.txt
-```
-
-### 3. 按 DOI 批量下载 PDF
-
-```bash
-# doi_list.tsv：每行 "DOI<TAB>题名"（纯 DOI 也可）
-python -m paperflow.cli download --doi-file doi_list.tsv --out downloads \
-    --mode oa+scihub --rpm 30 --email your@email.com
-```
-
-| 参数 | 说明 |
+| 路径 | 内容 |
 |---|---|
-| `--mode` | 下载通道，可组合：`cnki` / `scihub` / `oa` / `publisher` / `authorized`（逗号或 `+` 分隔）；默认 `oa+scihub` |
-| `--rpm` | 限速（篇/分钟），默认 30；**稳定优先，1 篇/分钟也行**（`--rpm 1`） |
-| `--failed` | 失败清单（DOI、题名、原因） |
-| `--db` | SQLite 路径，默认 `paperflow.db` |
-| `--keyword` | `download` 导入 DOI 清单时手动关联关键词，可重复指定 |
+| `/opt/paperflow-web/.venv` | 指向当前 Python 环境的链接 |
+| `/opt/paperflow-web/venvs/` | 各次安装的 Python 环境 |
+| `/etc/paperflow-web.env` | 登录凭据、API key、数据与下载配置 |
+| `/var/lib/paperflow/` | SQLite、PDF、输入、日志和导出文件 |
+| `/run/paperflow/worker.lock` | Worker 单实例锁 |
 
-### 4. 完全解耦：先检索，稍后从数据库下载
+**不要把 SQLite 数据根目录放在 rclone/WebDAV/FUSE 挂载盘上。** 本部署使用本地磁盘；网盘可用于另外备份完成的文件。
 
-检索阶段会把论文、关键词、来源和 PDF 候选全部保存到 SQLite。进程退出、重启电脑后仍可独立下载；CNKI 保存文章详情页，下载时再用当前授权会话生成临时下载地址。
+### 3. 设置登录和来源配置
 
 ```bash
-# 第一步：只检索和入库，不下载
-paperflow search --species "银杏" --sources CNKI --limit 20 --db paperflow.db
-
-# 第二步：以后任意时间从数据库下载未尝试项（OA 失败后尝试 Sci-Hub）
-paperflow download-db --db paperflow.db --keyword "银杏" --source CNKI \
-  --mode oa+scihub --status pending --out downloads
-
-# 重试以前失败的项目
-paperflow download-db --db paperflow.db --keyword "银杏" \
-  --mode cnki --status failed --out cnki_downloads
+sudo cat /etc/paperflow-web.env
+sudoedit /etc/paperflow-web.env
+sudo systemctl restart paperflow-web paperflow-worker
 ```
 
-`download-db` 支持 `--keyword`、`--source`、`--status pending|failed|all`、`--min-if`、`--max-if` 和 `--limit`。Europe PMC、S2 等直接全文候选同样会持久化，因此无 DOI 的开放全文也能稍后下载。
+默认用户名为 `paperflow`，密码由安装器随机生成，可自行修改。不要直接照抄别人的线上密码。
 
-网络下载通道默认最多 32 个并发 worker；WOS/Selenium 授权下载保持单浏览器串行。每次下载任务启动、成功或失败都会写入 `download_attempts`，失败会覆盖当前文献的旧 PDF 状态并保存明确原因。
+| 配置项 | 用途 |
+|---|---|
+| `PAPERFLOW_WEB_USERNAME` / `PAPERFLOW_WEB_PASSWORD` | 网页和 API 共用的登录凭据 |
+| `PAPERFLOW_WEB_SECRET` | 会话签名密钥；安装时自动生成 |
+| `WOS_API_KEY` | WOS Starter API；未配置时不能保证 WOS 数据源可用 |
+| `UNPAYWALL_EMAIL` | Unpaywall 使用的联系邮箱，建议填写 |
+| `NCBI_EMAIL` / `NCBI_API_KEY` | PubMed 联系邮箱、可选 API key |
+| `S2_API_KEY` | 可选 S2 API key；匿名请求可能限流 |
+| `OPENALEX_API_KEY` | 可选开放文献解析凭据 |
+| `PAPERFLOW_DOWNLOAD_WORKERS` | 默认 4 个下载线程 |
+| `PAPERFLOW_DOWNLOAD_BATCH_SIZE` | 默认每批 50 篇 |
+| `PAPERFLOW_MIN_FREE_GB` | 默认保留 3 GB 本地可用空间 |
+| `PAPERFLOW_PROXIES` | 可选代理；留空使用默认网络配置 |
 
-### 5. 影响因子（JIF）
+本安装布局固定采用 `/var/lib/paperflow` 和 `127.0.0.1:8765`。若要改变数据路径、监听端口或服务用户，需要同步修改 systemd 配置和健康检查，不要只改一个环境变量。
 
-JIF 是 Clarivate 的年度授权数据，项目不会用 CiteScore、SJR 或自行计算值冒充影响因子。请从你有权使用的数据来源导出 CSV/TSV 后导入；导入一次后，历史论文和以后新检索的论文都会按期刊规范名自动匹配最新年份。
+浏览器驱动不是默认 Web 下载流程的必要条件，因此服务器安装不会下载 Chromium。如使用 CLI 浏览器授权通道，需要另外安装 Playwright 浏览器及对应系统依赖；配置好可访问的浏览器会话后再使用。
 
-文件至少包含以下列（列名也兼容 `Journal name`、`JIF`、`JCR Year` 和中文列名）：
+### 4. 配置域名和 HTTPS
+
+先将你的域名 A/AAAA 记录指向服务器，并确保 80/443 端口可达。推荐使用 Caddy 反向代理。
+
+```bash
+sudo apt-get install -y caddy
+sudo mkdir -p /etc/caddy/conf.d
+sudo cp deploy/server/Caddyfile.example /etc/caddy/conf.d/paperflow.caddy
+sudoedit /etc/caddy/conf.d/paperflow.caddy
+```
+
+把示例域名换成自己的域名：
+
+```caddyfile
+paperflow.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8765
+}
+```
+
+在 `/etc/caddy/Caddyfile` 中添加下面一行（已有该配置则不要重复添加；保留其他站点配置）：
+
+```caddyfile
+import /etc/caddy/conf.d/*.caddy
+```
+
+检查并加载：
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+之后打开 `https://你的域名/`，输入配置文件中的账号密码。应用使用 Secure Cookie，**正式网页操作需要 HTTPS**；直接访问 HTTP 不适合作为最终部署。若使用 Cloudflare，配置与源站 HTTPS 一致的 Full (strict) 模式。
+
+### 5. 确认服务正常
+
+```bash
+systemctl status paperflow-web paperflow-worker --no-pager
+curl -fsS http://127.0.0.1:8765/healthz
+sudo journalctl -u paperflow-web -u paperflow-worker -n 80 --no-pager
+```
+
+健康检查应返回 `{"status":"ok"}`。访问其他接口不带凭据时返回 `401` 是预期行为。
+
+第一次先提交一个小任务（例如设置上限 10 篇），确认来源配置、磁盘空间和下载能力，再提交不限量任务。来源失败可能导致部分结果；任务成功不代表所有来源成功或所有 PDF 可用，应结合任务日志和 ZIP 的汇总核对。
+
+## 使用方式与输出结构
+
+首页两种关键词流程：
+
+1. **检索并下载 PDF**：关键词检索、元数据入库、下载全文并生成 ZIP。
+2. **只获取摘要与 DOI**：检索并输出 TXT，不生成 PDF ZIP。
+
+下载任务解压结构：
+
+```text
+task-1/
+├── 01_关键词一/
+│   ├── abstracts.txt
+│   ├── summary.txt
+│   └── pdf_downloaded/
+├── 02_关键词二/
+│   ├── abstracts.txt
+│   ├── summary.txt
+│   └── pdf_downloaded/
+└── manifest.json
+```
+
+- `abstracts.txt` 包含题目、作者、期刊、年份、DOI、摘要；摘要缺失会明确标注。
+- `summary.txt` 按参考文献格式列出论文，成功下载列在 `downloaded:`，没有有效 PDF 的列在 `failedDownload:`。
+- 即使没有 PDF，`pdf_downloaded/` 目录也保留。关键词匹配范围包含文后引用，因此可能出现正文提及该词但不是以该物种为主题的论文。
+- 同一论文匹配多个关键词时，可出现在多个分类下；同名 PDF 使用编号避免覆盖。
+- 新全流程任务在下载前保存任务语料快照。旧任务兼容从历史报告和关键词关系恢复，`manifest.json` 会注明范围依据。
+- DOI 输入没有关键词时，归入 `DOI清单/`。服务器直接生成有该结构的 ZIP，解压后得到任务文件夹，不额外复制一份全部 PDF。
+
+## AI / JSON API
+
+`/ai` 提供使用说明，`/api/v1` 提供机器可读接口摘要（不是 OpenAPI 规范文件）。下例将域名替换成你的域名；`curl -u paperflow` 会提示输入密码。
+
+创建检索任务：
+
+```bash
+curl -u paperflow 'https://paperflow.example.com/api/v1/jobs' \
+  -H 'Content-Type: application/json' \
+  -d '{"workflow":"metadata","items":["Ginkgo biloba"],"limit":10}'
+```
+
+创建关键词检索和下载任务：
+
+```bash
+curl -u paperflow 'https://paperflow.example.com/api/v1/jobs' \
+  -H 'Content-Type: application/json' \
+  -d '{"workflow":"download","mode":"keyword","items":["Ginkgo biloba"],"limit":10}'
+```
+
+DOI 下载：
+
+```json
+{"workflow":"download","mode":"doi","items":["10.1038/s41586-021-03819-2"],"limit":10}
+```
+
+成功入队返回 HTTP `202`。每隔几秒查询任务，直到 `succeeded`、`failed` 或 `cancelled`：
+
+```bash
+curl -u paperflow 'https://paperflow.example.com/api/v1/jobs/1'
+curl -u paperflow 'https://paperflow.example.com/api/v1/papers?q=Ginkgo&limit=20'
+```
+
+| 接口 | 功能 |
+|---|---|
+| `GET /api/v1/papers?q=...&limit=20&offset=0` | 查询共享文献库；不是发起新的外部检索 |
+| `GET /api/v1/papers/<id>` | 论文元数据、PDF 下载链接 |
+| `GET /api/v1/papers/<id>/pdf` | 下载单篇 PDF |
+| `POST /api/v1/jobs` | 新建检索或下载任务 |
+| `GET /api/v1/jobs/<id>` | 状态、日志、`archive_url`、`txt_url` |
+| `GET /api/v1/jobs/<id>/archive` | 成功下载任务的 ZIP |
+| `GET /jobs/<id>/results.txt` | 成功纯检索任务的 TXT |
+| `GET /api/v1/impact-factors?q=Nature&limit=50` | 查询已导入期刊指标 |
+
+所有文件下载也需要 Basic Auth。机器客户端用 `application/json` 和认证头，不带浏览器 `Origin` / `Sec-Fetch-Site` 头时无需 CSRF token；浏览器操作仍要求 CSRF。数据源和下载模式由现有服务流程决定，不支持向该任务接口任意传入 CLI 命令。
+
+## 导入影响因子
+
+准备 UTF-8 CSV/TSV，例如下面是**演示数据**：
 
 ```csv
 journal,impact_factor,year
-Journal of Example Research,4.5,2024
+Example Journal,3.2,2024
 ```
 
 ```bash
-paperflow impact-factor import --file jcr.csv --source "JCR 2024" --db paperflow.db
-
-# 查看匹配结果或按影响因子筛选
-paperflow db list --min-if 5 --max-if 10 --limit 100
-
-# 只下载影响因子不低于 5 的未尝试论文
-paperflow download-db --status pending --min-if 5 --out downloads
-
-# 先只预解析 DOI 的 OA/出版社候选，不下载文件
-paperflow download-preflight --db paperflow.db --limit 100
+sudo install -o paperflow -g paperflow -m 0640 metrics.csv /var/lib/paperflow/imports/metrics.csv
+sudo -u paperflow env PAPERFLOW_DATA_ROOT=/var/lib/paperflow \
+  /opt/paperflow-web/.venv/bin/paperflow impact-factor import \
+  --file /var/lib/paperflow/imports/metrics.csv \
+  --db /var/lib/paperflow/paperflow.db --source JCR
 ```
 
-`--limit 0` 表示处理全部未下载论文。预解析优先批量查询 OpenAlex；若当前出口被 429 限流且配置了 `S2_API_KEY`，会自动使用 Semantic Scholar batch API 补齐摘要、OA PDF 和 PMC 候选。
+随后可在 `/impact-factors` 或 API 中查询。来源标签由导入者提供，不代表系统验证了其真实性。指标按期刊名关联并选用库中较新年份，不是每篇论文自身的影响因子。
 
-只下载已经预解析出的合法候选（不再次逐 DOI 查询）：
+## 升级、备份与迁移
+
+### 升级便携安装
+
+下载并解压新发行包，在新目录中执行：
 
 ```bash
-paperflow download-db --db paperflow.db --out pdf_downloaded \
-  --mode direct --status candidate --limit 0 --rpm 600
+sudo bash deploy/server/install.sh --upgrade
 ```
 
-整理旧目录中的有效 PDF 并回写 SQLite，然后重新生成交付文件：
+升级先创建新虚拟环境，依赖安装成功后再切换服务；保留配置、数据和旧环境。健康检查失败时尝试切回旧环境。重启可能中断正在运行的任务并触发恢复，建议任务完成后升级。
+
+旧环境放在 `/opt/paperflow-web/venvs/`；确认新版本正常后，可查看 `.venv` 的链接目标，再手动删除不再使用的旧环境，避免累积占用。
+
+### 备份
+
+停止服务后再打包 SQLite 和数据目录，备份会包含密钥，请妥善保管：
 
 ```bash
-paperflow db reconcile-pdfs --db paperflow.db --pdf-dir pdf_downloaded
-paperflow db export-report --db paperflow.db \
-  --abstracts abstracts.txt --summary summary.txt
+sudo systemctl stop paperflow-worker paperflow-web
+sudo tar -czf /path/on/backup-disk/paperflow-backup.tar.gz \
+  /etc/paperflow-web.env /var/lib/paperflow
+sudo systemctl start paperflow-web paperflow-worker
 ```
 
-结果始终同时保存影响因子数值、年份和数据来源；未精确匹配的期刊显示 `-`，不会猜测。
+建议保存到另一块磁盘或将备份上传至远端，避免在满盘的 VPS 上额外生成大备份。不要在运行中删除 SQLite 的 WAL/SHM 文件，也不要删除尚未同步的 rclone 写缓存。
 
-### 6. 全流程（检索 → 下载）
+### 已有手动部署
+
+安装器不会直接覆盖没有 `.portable-install` 标记的 `/opt/paperflow-web`。如果已有自定义部署，先在新服务器验证发行版；迁移时停止旧服务、备份配置和完整数据目录、安装新服务，再恢复数据并调整目录属主为 `paperflow:paperflow`。数据库中已有 PDF 绝对路径时，应保持原数据路径或另做路径迁移，不能只复制数据库。
+
+## 本地开发与测试
 
 ```bash
-python -m paperflow.cli run --input input.txt --out downloads --mode cnki+scihub+oa --limit 20
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m pytest tests -q
 ```
 
-CNKI 通道不要求 DOI；它使用检索时保留的文章详情页候选，复用 `sessions/cnki.json`，点击可见的 `PDF Download`。只有文件头为 `%PDF-` 才会记为成功。无机构权限、登录失效或出现验证码时会停止该篇下载并给出提示，不会绕过站点限制。
-
-### 7. SQLite 数据库
-
-每个检索、下载、全流程和报告命令都支持 `--db`。数据库保存文章元数据与摘要，并用关联表记录“一篇文章对应多个关键词、多个检索来源”；下载成功源、PDF 路径和每次下载历史也会保留。
+打包：
 
 ```bash
-# 查看统计
-python -m paperflow db stats
-
-# 按关键词查看文章
-python -m paperflow db list --keyword "Panthera tigris" --limit 20
-
-# 把旧 abstracts.txt / summary.txt 迁移进数据库（可重复执行）
-python -m paperflow db import-legacy
-
-# 自动去重：先预览，再执行
-python -m paperflow db dedupe --dry-run
-python -m paperflow db dedupe
-
-# 使用另一个数据库文件
-python -m paperflow search --input input.txt --db data/my-papers.db
+python3 scripts/build_server_release.py
 ```
 
-表结构和字段说明见 [`docs/database.md`](docs/database.md)。
+输出 `dist/paperflow-web-0.9.0.tar.gz`、`.zip` 和 SHA-256 校验文件。构建使用明确的源码白名单，不收集本机 `.env`、cookies、论文 PDF、SQLite 或实例部署记录。
 
-### 8. WOS 官方 API 批量获取
+## 许可证
 
-```bash
-# 单个关键词，最多 1000 条
-paperflow wos-fetch --keyword "Ginkgo biloba" --max-records 1000
-
-# 多个关键词（input.txt 每行一个）；0 表示全部
-paperflow wos-fetch --input input.txt --max-records 0 --db paperflow.db
-```
-
-每页最多 50 条，默认两次 API 请求间隔 1 秒。数据每页先增量写入 SQLite，然后原子更新
-`wos_api_runs/manifest.json`；重新运行同一命令会从已完成条数继续。SQLite 会按 DOI/题名自动去重。
-
-Starter API 提供题名、作者、DOI、期刊和年份，但不保证提供摘要。如需补充 Full Record 字段，
-仍可使用你已获授权的 WOS 浏览器导出；`export-wos` 仅作 legacy 备用，新检索链路不依赖它。
-
-### 9. 高校 WebVPN 机构通道（付费墙终极兜底）
-
-针对 Sci-Hub 未收录、Cloudflare 拦截的付费墙文献（如 Wiley/ACS），可通过学校 WebVPN + CAS
-统一认证走机构订阅下载。内置 100+ 所高校的 WebVPN 入口（数据来自 scansci-pdf，Apache-2.0，
-见 `paperflow/data/webvpn.json`）。
-
-```bash
-# 1) 查找并登录你的学校（弹浏览器完成 CAS/SSO，密码不经过工具）
-paperflow auth webvpn-list --school 北京
-paperflow auth login webvpn --school 北京大学
-# 非登录态检查
-paperflow auth status webvpn    # none / valid / expired / unreachable
-
-# 2) 下载时把 webvpn 加入通道组合（放最后作铃底）
-paperflow download --doi-file doi_list.txt --out downloads \
-    --mode oa+scihub+publisher+webvpn --rpm 20
-paperflow download-db --db paperflow.db --mode oa+scihub+webvpn --status failed --limit 0
-```
-
-实现（`paperflow/pdf/webvpn.py`）：目标 URL 的 hostname 用 AES-128-CFB 加密生成 WebVPN 转发
-地址（`https://<webvpn>/https/<hex(iv)+hex(密文)><原路径>`），复用登录 cookie 经 WebVPN 抓取
-出版社 PDF 直链并校验 `%PDF-` 头；HTTP 通道失败时自动险底到可见浏览器（监听 PDF 响应 /
-触发下载）。会话保存在 `sessions/webvpn.json`（学校、入口、密钥、cookie）。
-
-  登录成功后会话保存到 `sessions/webvpn.json`；`auth status webvpn` 探测会话状态。
-
-### 10. CARSI 机构认证通道（校外免 VPN）
-
-CARSI（高校身份认证联盟，Shibboleth/SAML 联邦）让**校外用户用自己的学校 CAS 统一认证直接
-登录出版社**，无需 VPN。支持 Wiley/ACS/ScienceDirect/Springer/Nature/T&F/IEEE/Oxford/
-RoyalSociety/SAGE/ASCE（`paperflow/pdf/carsi.py`，登录思路借鉴 scansci-pdf，Apache-2.0）。
-
-```bash
-# 1) 每家出版社登录一次（弹浏览器 → 搜学校 → 学校 CAS → 自动保存会话）
-paperflow auth login carsi --school 首都师范大学 --publisher wiley
-paperflow auth login carsi --school 首都师范大学 --publisher acs
-
-# 2) 下载时加 carsi 通道 + --idp 学校名（或环境变量 PAPERFLOW_CARSI_IDP）
-paperflow download --doi-file rest.txt --out downloads \
-    --mode oa+scihub+carsi --idp 首都师范大学 --rpm 10
-paperflow download-db --db paperflow.db --mode oa+scihub+carsi \
-    --status failed --limit 0 --out downloads
-```
-
-流程：打开文章页（先让 Cloudflare 放行）→ 找 "Access through your institution" SSO 链接
-→ WAYF 机构搜索（`Capital Normal` 等英文名，`paperflow/pdf/carsi.py` 内建 IDP 映射）→
-学校 CAS（用户输入学号密码，工具不接触）→ 认证回跳后保存 publisher cookie 到
-`sessions/carsi_<publisher>.json` → 经会话抓取出版社 PDF 直链（响应捕获/直链构造/点击 PDF
-按钮）→ 校验 `%PDF-` 落盘。出版社识别按 DOI 前缀映射（不依赖可能超时的网络解析）。
-
-### 11. 浏览器操作通道（校园网内，给出出版社网址直接下）
-
-在**校园网/机构网络内**（出口 IP 自带订阅授权，无需登录），直接把出版社文章
-URL 列表交给 browser 通道，Playwright 打开页面（等待 Cloudflare 放行者自动静待）
-→ 网络响应捕获 / 出版社 PDF 直链 / 页面找链接或点击 PDF 按钮 → 校验 `%PDF-` 落盘：
-
-```bash
-# urls.txt 每行一个文章 URL 或 DOI
-python -m paperflow.cli download --url-file urls.txt --out downloads \
-    --db paperflow.db --rpm 6 --keyword "校园网"
-# 或作为通道之一组合进普通下载（DOI 走 Browser 兜底）
-python -m paperflow.cli download --doi-file doi_list.txt --out downloads \
-    --mode oa+scihub+publisher+browser --rpm 10
-```
-
-实现（`paperflow/pdf/agentbrowser.py`）：与 CARSI 共享同一套出版社 PDF 直链规则；
-CF 交互式挑战无法自动通过时如实提示换节点/人工。适合 AI 拿到文章页地址后自动取全文。
-
-## 代码结构
-
-```
-paperflow/
-  cli.py              统一命令行（search/wos-fetch/download/auth）
-  tui.py              Textual 全屏终端界面
-  workflows.py        CLI/TUI 共享检索与下载工作流
-  auth.py             浏览器授权（弹窗登录 → 捕获 cookie → sessions/）
-  net.py              网络层（会话、代理 failover、限速器）
-  models.py           论文数据模型与去重
-  database.py         SQLite schema、候选队列、JIF 匹配、查询与迁移
-  sources/            元数据源适配器（注册表模式，可插拔增删）
-    wos.py  pubmed_crossref_s2.py  cnki.py
-  pdf/                PDF 引擎：依次尝试 CNKI → Sci-Hub → OA → 出版社 → WebVPN → CARSI
-    cnki.py           CNKI 机构会话 + 浏览器下载事件 + PDF 校验
-    scihub.py         altcha 求解 + DDoS-Guard 会话
-    oa.py             Unpaywall / PMC
-    publisher.py      出版社订阅适配（带浏览器授权登录态）
-    webvpn.py         高校 WebVPN 机构通道（AES 转发 URL + 会话复用）
-    carsi.py          CARSI 联邦认证机构通道（CAS 登录，无 VPN）
-    agentbrowser.py   浏览器操作通道（给 URL/DOI，校园网内直接取 PDF）
-  schools.py          高校 WebVPN 学校数据库（data/webvpn.json）
-  legacy/             旧版独立脚本（wos_species_downloader 等，保留可参考）
-tests/                主包的离线单元测试
-```
-
-源码、本机会话、日志和下载结果的完整边界见 [`docs/project-layout.md`](docs/project-layout.md)。现有下载数据不会在安装或测试时被移动、覆盖。
-
-## 开发验证
-
-```bash
-python -m unittest discover -s tests -v
-python -m compileall -q paperflow
-```
-
-如需 pytest：`pip install -e '.[dev]'`。
-
-## 边界与合规提示
-
-- Sci-Hub、付费墙绕过仅应在您有权使用的范围内使用；请遵守学校图书馆与出版社条款。
-- `auth login` 只保存您主动登录产生的会话，不读取浏览器其它数据。
-- 新文献（2025-2026）Sci-Hub 覆盖率有限（数据库基本停留在 2021 前后）；付费墙文献最可靠的来源是学校订阅（`auth login sciencedirect` 等）。
+代码采用 [MIT License](LICENSE)。第三方 Python 包与论文内容适用各自许可证；请仅获取和使用你有权访问的文献资源。

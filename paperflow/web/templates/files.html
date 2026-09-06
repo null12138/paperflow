@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}文件 · Paperflow{% endblock %}
+{% block content %}
+<div class="page-head"><div><p class="eyebrow">PAPERFLOW FILES</p><h1>文件</h1><p>{{ relative or '可下载文件' }}</p></div></div>
+{% if can_upload %}
+<section class="panel">
+  <form class="upload" method="post" action="{{ url_for('upload_file') }}" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="path" value="{{ relative }}"><input type="file" name="file" required><button class="button primary" type="submit">上传到当前目录</button></form>
+</section>
+{% endif %}
+<section class="panel flush"><div class="table-wrap"><table><thead><tr><th>名称</th><th>类型</th><th>大小</th><th>操作</th></tr></thead><tbody>
+  {% if parent is not none %}<tr><td><a href="{{ url_for('files', path=parent) }}">↰ 上一级</a></td><td>目录</td><td>-</td><td></td></tr>{% endif %}
+  {% for entry in entries %}<tr><td>{% if entry.is_dir %}<a href="{{ url_for('files', path=entry.relative) }}">▰ {{ entry.name }}</a>{% else %}{{ entry.name }}{% endif %}</td><td>{{ '目录' if entry.is_dir else '文件' }}</td><td>{{ '-' if entry.is_dir else entry.size|filesize }}</td><td>{% if not entry.is_dir %}<a href="{{ url_for('download_file', relative=entry.relative) }}">下载</a>{% if entry.name.lower().endswith('.pdf') %} · <a href="{{ url_for('download_file', relative=entry.relative, inline=1) }}" target="_blank">预览</a>{% endif %}{% endif %}</td></tr>{% else %}<tr><td colspan="4" class="empty">目录为空</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

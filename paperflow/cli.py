@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import sys
@@ -22,10 +23,11 @@ from .config import load_env
 load_env()
 
 from .models import Paper, add_paper, clean_text, unique_papers
+from .paths import data_path
 from .sources import SOURCES
 
 
-DEFAULT_DB = Path("paperflow.db")
+DEFAULT_DB = data_path("paperflow.db")
 
 
 def _load_species(path: Path) -> list[str]:
@@ -143,7 +145,8 @@ def cmd_download_db(args: argparse.Namespace) -> int:
     result = download_database_queue(
         db_path=args.db, out_dir=args.out, mode=args.mode, rpm=args.rpm, email=args.email,
         keyword=args.keyword, source=args.source, status=args.status, limit=args.limit,
-        min_if=args.min_if, max_if=args.max_if, progress=print,
+        min_if=args.min_if, max_if=args.max_if, attempt_before=args.attempt_before,
+        progress=print,
     )
     print(f"数据库: {args.db}")
     return 0 if result["failed"] == 0 else 3
@@ -177,11 +180,26 @@ def cmd_tui(args: argparse.Namespace) -> int:
     return run_tui(args.db)
 
 
+def cmd_web(args: argparse.Namespace) -> int:
+    """启动 Web 管理界面；后台任务由独立 paperflow-worker 执行。"""
+    os.environ["PAPERFLOW_WEB_HOST"] = args.host
+    os.environ["PAPERFLOW_WEB_PORT"] = str(args.port)
+    from .web.app import main as web_main
+    return web_main()
+
+
+def cmd_web_worker(_args: argparse.Namespace) -> int:
+    """启动持久任务 worker。"""
+    from .web.worker import main as worker_main
+    return worker_main()
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """全流程：物种 → 多源检索 → 汇总 → PDF 下载。"""
     from .pdf import PdfEngine
     from .database import PaperDatabase
     from . import net
+    from .workflows import _search_one_source
     client = net.make_session(email=args.email)
     species_names = _load_species(args.input)
     requested_sources = [name.strip() for name in args.sources.split(",") if name.strip()]
@@ -191,7 +209,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"\n检索物种: {species}")
         for source in sources:
             try:
-                for p in source.search_species(client, species, args.limit):
+                # Keep the Web full-run path under the same process-level guard
+                # as the durable search workflow.  WOS can keep a TCP request
+                # open indefinitely even when requests' read timeout fires.
+                for p in _search_one_source(source, client, species, args.limit):
                     add_paper(collection, p)
                 print(f"  {source.name}: 完成")
             except NotImplementedError:
@@ -199,6 +220,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             except Exception as exc:
                 print(f"  {source.name}: 失败（{clean_text(exc)[:80]}）")
     papers = sorted(unique_papers(collection), key=lambda p: p.year, reverse=True)
+    if args.limit > 0:
+        papers = papers[:args.limit]
     engine = PdfEngine(out_dir=args.out, email=args.email, max_per_minute=args.rpm,
                        cookie_file=Path("scihub_cookies.json"),
                        use_scihub="scihub" in args.mode, use_oa="oa" in args.mode,
@@ -206,17 +229,49 @@ def cmd_run(args: argparse.Namespace) -> int:
                        use_webvpn="webvpn" in args.mode,
                        use_cnki="cnki" in args.mode)
     ok_count = fail_count = 0
+    mode_tokens = {part.strip().casefold() for part in args.mode.replace(",", "+").split("+") if part.strip()}
     with PaperDatabase(args.db) as database:
         database.save_papers(papers)
-        for i, paper in enumerate(papers, 1):
-            ok, info = engine.fetch(paper)
-            database.save_download(paper, ok, info)
-            if ok:
-                ok_count += 1
-                print(f"[{i}/{len(papers)}] OK {paper.doi or paper.title[:40]} | {info[:50]}", flush=True)
-            else:
-                fail_count += 1
-                print(f"[{i}/{len(papers)}] FAIL {paper.doi or paper.title[:40]} | {info[:60]}", flush=True)
+        if os.getenv("PAPERFLOW_JOB_ID"):
+            from .web.archive import save_corpus
+            save_corpus(int(os.environ["PAPERFLOW_JOB_ID"]), papers)
+        if "oa" in mode_tokens and papers:
+            # Resolve public OA/PMC locations in batches before downloading;
+            # this is much more effective than relying only on per-DOI lookup.
+            from .workflows import preflight_download_candidates
+            print("正在准备公开全文候选…", flush=True)
+            try:
+                preflight_download_candidates(args.db, args.email, limit=0, progress=print)
+            except Exception as exc:
+                print(f"公开全文候选准备失败，将继续已有通道：{type(exc).__name__}: {str(exc)[:120]}", flush=True)
+        requested_workers = max(1, int(os.getenv("PAPERFLOW_DOWNLOAD_WORKERS", "8")))
+        if mode_tokens & {"browser", "wos", "cnki", "webvpn", "carsi", "authorized"}:
+            requested_workers = 1
+        workers = min(requested_workers, max(1, len(papers)))
+        batch_size = max(10, int(os.getenv("PAPERFLOW_DOWNLOAD_BATCH_SIZE", "100")))
+        print(f"PDF 下载并发：{workers} 路", flush=True)
+
+        def fetch_one(paper):
+            try:
+                return paper, *engine.fetch(paper)
+            except Exception as exc:
+                return paper, False, f"下载异常：{type(exc).__name__}: {str(exc)[:120]}"
+
+        for batch_start in range(0, len(papers), batch_size):
+            engine.wait_for_storage(print)
+            batch = papers[batch_start:batch_start + batch_size]
+            with ThreadPoolExecutor(max_workers=min(workers, max(1, len(batch)))) as pool:
+                futures = [pool.submit(fetch_one, paper) for paper in batch]
+                for offset, future in enumerate(as_completed(futures), 1):
+                    paper, ok, info = future.result()
+                    database.save_download(paper, ok, info)
+                    i = batch_start + offset
+                    if ok:
+                        ok_count += 1
+                        print(f"[{i}/{len(papers)}] OK {paper.doi or paper.title[:40]} | {info[:50]}", flush=True)
+                    else:
+                        fail_count += 1
+                        print(f"[{i}/{len(papers)}] FAIL {paper.doi or paper.title[:40]} | {info[:60]}", flush=True)
     with Path(args.summary).open("w", encoding="utf-8") as f:
         f.write(f"检索到论文: {len(papers)}\n成功下载: {ok_count}\n失败: {fail_count}\n\n")
         for p in papers:
@@ -507,13 +562,14 @@ def main(argv: list[str] | None = None) -> int:
     p_dd.add_argument("--mode", default="oa+scihub", help="可组合: direct, cnki, oa, scihub, publisher, webvpn, authorized；默认 oa+scihub")
     p_dd.add_argument("--keyword", default="", help="只下载指定检索关键词")
     p_dd.add_argument("--source", default="", help="只下载指定元数据来源，如 CNKI")
-    p_dd.add_argument("--status", choices=["pending", "failed", "all", "candidate", "candidate-pending", "candidate-pmc-pending"], default="pending",
+    p_dd.add_argument("--status", choices=["pending", "failed", "all", "candidate", "candidate-pending", "candidate-pmc-pending", "candidate-pmc"], default="pending",
                       help="pending=未尝试，failed=重试失败项，candidate=已有候选，candidate-pending=候选且未尝试，candidate-pmc-pending=PMC候选且未尝试，all=全部未下载")
     p_dd.add_argument("--min-if", type=float, default=None, help="最低影响因子（需先导入 JIF）")
     p_dd.add_argument("--max-if", type=float, default=None, help="最高影响因子（需先导入 JIF）")
     p_dd.add_argument("--limit", type=int, default=100)
     p_dd.add_argument("--rpm", type=int, default=60, help="下载限速（推荐 60，即每篇约 1 秒）")
     p_dd.add_argument("--email", default="")
+    p_dd.add_argument("--attempt-before", default="", help=argparse.SUPPRESS)
     p_dd.set_defaults(fn=cmd_download_db)
 
     p_pf = sub.add_parser("download-preflight", help="预解析 DOI 的 OA/出版社下载候选，不下载文件")
@@ -535,6 +591,14 @@ def main(argv: list[str] | None = None) -> int:
     p_tui = sub.add_parser("tui", help="启动全屏终端界面")
     p_tui.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径")
     p_tui.set_defaults(fn=cmd_tui)
+
+    p_web = sub.add_parser("web", help="启动 Web 管理界面")
+    p_web.add_argument("--host", default="127.0.0.1")
+    p_web.add_argument("--port", type=int, default=8765)
+    p_web.set_defaults(fn=cmd_web)
+
+    p_worker = sub.add_parser("web-worker", help="启动 Web 持久任务 worker")
+    p_worker.set_defaults(fn=cmd_web_worker)
 
     p_r = sub.add_parser("run", help="全流程：检索 + 下载")
     p_r.add_argument("--input", type=Path, default=Path("input.txt"))
@@ -598,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
     p_db.add_argument("--db", type=Path, default=DEFAULT_DB, help="SQLite 数据库路径")
     p_db.add_argument("--keyword", default="", help="list 时按关键词过滤")
     p_db.add_argument("--source", default="", help="list 时按元数据来源过滤")
-    p_db.add_argument("--status", choices=["pending", "failed", "all", "downloaded"], default="",
+    p_db.add_argument("--status", choices=["pending", "failed", "all", "downloaded", "candidate", "candidate-pending", "candidate-pmc-pending", "candidate-pmc"], default="",
                       help="list 时按下载状态过滤")
     p_db.add_argument("--min-if", type=float, default=None, help="list 时按最低影响因子过滤")
     p_db.add_argument("--max-if", type=float, default=None, help="list 时按最高影响因子过滤")

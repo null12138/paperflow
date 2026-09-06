@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}PDF 下载 · Paperflow{% endblock %}
+{% block content %}
+<section class="download-hero">
+  <div>
+    <p class="eyebrow">PDF WORKSPACE</p>
+    <h1>PDF 下载</h1>
+    <p>粘贴或上传 DOI，系统会自动获取可用 PDF。页面关闭后任务仍会继续，已成功的文件不会重复下载。</p>
+  </div>
+  <div class="download-summary"><strong>持续运行</strong><span>关闭页面也不会中断</span></div>
+</section>
+
+<section class="form-grid">
+  <form class="task-card accent" method="post" enctype="multipart/form-data" action="{{ url_for('import_dois') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <p class="eyebrow">Import & download</p><h2>导入 DOI 自动下载</h2>
+    <p class="form-note">每行一个 DOI，也支持 <code>DOI + Tab + 标题</code>。可以粘贴、上传文件，或两者同时使用；重复 DOI 会自动去除。</p>
+    <label>粘贴 DOI<textarea name="dois" rows="9" placeholder="10.1038/s41586-021-03819-2&#10;https://doi.org/10.1093/nar/gkad980"></textarea></label>
+    <label>上传 DOI 文本文件（UTF-8，最大 5 MB）<input name="file" type="file" accept=".txt,.tsv,text/plain,text/tab-separated-values"></label>
+    <div class="fixed-mode"><span>无需额外设置</span><strong>自动获取全部可用 PDF</strong><small>重复 DOI 会自动去除，失败项可稍后再次尝试</small></div>
+    <button class="button primary" type="submit">导入并开始下载</button>
+  </form>
+
+  <form class="task-card" method="post" action="{{ url_for('new_job', kind='download_db') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="status" value="all"><input type="hidden" name="limit" value="0"><input type="hidden" name="rpm" value="60">
+    <p class="eyebrow">EXISTING LIBRARY</p><h2>补全已有文献库</h2>
+    <p class="form-note">自动检查文献库中尚未获取的论文，并继续尝试下载。无需选择状态、数量或来源。</p>
+    <div class="fixed-mode"><span>自动断点续传</span><strong>只处理尚未成功的论文</strong><small>后台运行，不影响您继续使用其他页面</small></div>
+    <button class="button primary" type="submit">开始补全文献库</button>
+  </form>
+</section>
+
+<section class="panel flush">
+  <div class="section-head padded"><div><p class="eyebrow">Download queue</p><h2>PDF 下载任务</h2></div><a href="{{ url_for('jobs') }}">查看全部任务</a></div>
+  <div class="task-list jobs-list">{% for job in jobs %}<div class="task-row" data-job-id="{{ job.id }}"><span class="task-id">#{{ job.id }}</span><span class="task-main"><strong><a href="{{ url_for('job_detail', job_id=job.id) }}">{{ job_labels.get(job.kind, job.kind) }}</a></strong><small class="task-message">{{ job.message or '等待执行' }} · {{ job.created_at }}</small><span class="task-progress"><i class="task-progress-fill {{ job.status }}"></i></span></span><span class="task-actions"><span class="task-state {{ job.status }}">{{ {'succeeded':'完成','running':'运行中','queued':'排队中','failed':'未完成','cancelled':'已取消'}.get(job.status, job.status) }}</span>{% if job.kind == 'download_list' %}<a class="button" href="{{ url_for('publisher_links', job_id=job.id) }}">未下载 DOI</a>{% endif %}{% if job.archive_ready %}<a class="button primary task-archive" href="{{ url_for('download_archive', job_id=job.id) }}">下载 ZIP</a>{% endif %}</span></div>{% else %}<div class="task-empty">暂无 PDF 下载任务</div>{% endfor %}</div>
+</section>
+{% endblock %}

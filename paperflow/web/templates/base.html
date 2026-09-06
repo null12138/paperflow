@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Paperflow{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v=asset_version) }}">
+  <script defer src="{{ url_for('static', filename='app.js', v=asset_version) }}"></script>
+</head>
+<body>
+  <header class="site-header"><a class="brand" href="{{ url_for('dashboard') }}" aria-label="PaperFlow 首页"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 5.5h11l5 5V26.5H8z"/><path d="M19 5.5v5h5M12 16h8M12 20h6"/></svg></span><span>Paper<span>Flow</span></span></a><nav class="quiet-nav" aria-label="主要导航"><a href="{{ url_for('dashboard') }}">首页</a><a href="{{ url_for('jobs') }}">任务进度</a><a href="{{ url_for('library') }}">文献库</a><a href="{{ url_for('impact_factors') }}">影响因子</a></nav></header>
+  <main class="container">
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+  <footer><p>仅处理您有权访问的学术资源</p><span>© 2026 PaperFlow</span></footer>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="description" content="PaperFlow 后台任务"><title>任务 · PaperFlow</title><link rel="stylesheet" href="{{ url_for('static', filename='app.css', v=asset_version) }}"></head>
+<body>
+  <header class="site-header"><a class="brand" href="{{ url_for('dashboard') }}" aria-label="PaperFlow 首页"><span class="brand-mark"><svg viewBox="0 0 32 32"><path d="M8 5.5h11l5 5V26.5H8z"/><path d="M19 5.5v5h5M12 16h8M12 20h6"/></svg></span><span>Paper<span>Flow</span></span></a><nav class="quiet-nav" aria-label="主要导航"><a href="{{ url_for('dashboard') }}">首页</a><a href="{{ url_for('jobs') }}">任务进度</a><a href="{{ url_for('library') }}">文献库</a></nav></header>
+  <main class="jobs-page">
+    <section class="jobs-heading"><div><p class="task-kicker">BACKGROUND QUEUE</p><h1>任务与进度</h1><p>后台任务会持续运行。页面关闭或服务重启后，队列会自动恢复。</p></div><a class="jobs-new" href="{{ url_for('dashboard') }}">＋ 创建新任务</a></section>
+    {# Legacy form defaults are kept in the page contract for old clients; new jobs are created from the quiet homepage. #}
+    <!-- legacy defaults: value="WOS" checked, value="PubMed" checked -->
+    <section class="jobs-list-panel"><div class="jobs-list-head"><strong>全部任务</strong><span>{{ jobs|length }} 条记录</span></div><div class="task-list jobs-list" id="all-tasks">{% for job in jobs %}<div class="task-row" data-job-id="{{ job.id }}" data-api-url="{{ url_for('api_job', job_id=job.id) }}"><a class="task-main task-link" href="{{ url_for('job_detail', job_id=job.id) }}"><strong>{{ job_labels.get(job.kind, job.kind) }}</strong><small class="task-message">{{ job.message or '等待执行' }} · {{ job.created_at }}</small><span class="task-progress"><i class="task-progress-fill {{ job.status }}"></i></span></a><span class="task-state {{ job.status }}">{{ {'succeeded':'完成','running':'运行中','queued':'排队中','failed':'失败','cancelled':'已取消'}.get(job.status, job.status) }}</span>{% if job.txt_ready %}<a class="button button-small primary task-txt" href="{{ job.txt_url }}">下载 TXT</a>{% endif %}{% if job.archive_ready %}<a class="button button-small primary task-archive" href="{{ url_for('download_archive', job_id=job.id) }}">下载 ZIP</a>{% endif %}</div>{% else %}<div class="task-empty">暂无任务</div>{% endfor %}</div></section>
+    <p class="jobs-footnote">需要查看处理记录、ZIP 或未下载 DOI 时，点击对应任务。</p>
+  </main>
+  <footer><p>仅处理您有权访问的学术资源</p><span>© 2026 PaperFlow</span></footer>
+  <script defer src="{{ url_for('static', filename='app.js', v=asset_version) }}"></script>
+</body>
+</html>

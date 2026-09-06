@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,16 @@ class DatabaseTests(unittest.TestCase):
                 database.save_papers([Paper(title=f"Paper {index}") for index in range(1005)])
                 self.assertEqual(len(database.list_papers(limit=0)), 1005)
                 self.assertEqual(len(database.load_papers_for_download(limit=0, status="all")), 1005)
+
+    def test_text_search_pagination_and_pmc_resume_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with PaperDatabase(Path(directory) / "papers.db") as database:
+                first = Paper(title="Ginkgo alpha", doi="10.1/a")
+                first.add_candidate("https://europepmc.org/articles/PMC1?pdf=render", "europepmc", 1)
+                database.save_papers([first, Paper(title="Ginkgo beta"), Paper(title="Tiger")])
+                self.assertEqual(len(database.list_papers(text="Ginkgo", limit=1, offset=0)), 1)
+                self.assertEqual(len(database.list_papers(text="Ginkgo", limit=1, offset=1)), 1)
+                self.assertEqual(len(database.load_papers_for_download(status="candidate-pmc")), 1)
 
     def test_clear_all_removes_business_data_and_keeps_schema(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -77,6 +88,23 @@ class DatabaseTests(unittest.TestCase):
                 database.save_papers([Paper(title="银杏叶研究", abstract="摘要", sources={"CNKI"})])
                 self.assertEqual(database.stats()["papers"], 1)
 
+    def test_pdf_engine_guards_local_cache_disk_for_remote_mounts(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ,
+            {"PAPERFLOW_LOCAL_DISK_PATH": directory, "PAPERFLOW_MIN_FREE_GB": "3"},
+            clear=False,
+        ):
+            engine = PdfEngine(Path(directory) / "downloads", use_oa=False, use_scihub=False)
+            with patch("paperflow.pdf.shutil.disk_usage") as usage:
+                usage.side_effect = [Mock(free=10 * 1024**3), Mock(free=2 * 1024**3)]
+                self.assertFalse(engine.storage_available())
+            notices = []
+            with patch.object(engine, "storage_available", side_effect=[False, True]), patch(
+                "paperflow.pdf.time.sleep"
+            ):
+                engine.wait_for_storage(notices.append)
+            self.assertEqual(notices, ["本地缓存正在同步，空间恢复后会自动继续"])
+
     def test_pdf_candidates_survive_search_then_database_download(self):
         with tempfile.TemporaryDirectory() as directory:
             with PaperDatabase(Path(directory) / "papers.db") as database:
@@ -100,6 +128,34 @@ class DatabaseTests(unittest.TestCase):
                 database.save_download(queue[0], False, "network failed")
                 self.assertEqual(database.load_papers_for_download(status="pending"), [])
                 self.assertEqual(len(database.load_papers_for_download(status="failed")), 1)
+
+    def test_interrupted_start_marker_remains_pending_until_a_result_is_saved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with PaperDatabase(Path(directory) / "papers.db") as database:
+                paper = Paper(title="Interrupted", doi="10.1000/interrupted")
+                database.save_papers([paper])
+                database.record_download_start(paper)
+                self.assertEqual(len(database.load_papers_for_download(status="pending")), 1)
+                database.save_download(paper, False, "network failed")
+                self.assertEqual(database.load_papers_for_download(status="pending"), [])
+
+    def test_retry_cutoff_excludes_results_completed_by_the_same_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with PaperDatabase(Path(directory) / "papers.db") as database:
+                paper = Paper(title="Retry once", doi="10.1000/retry")
+                database.save_download(paper, False, "old failure")
+                database.connection.execute(
+                    "UPDATE download_attempts SET attempted_at = ?", ("2020-01-01 00:00:00",)
+                )
+                database.connection.commit()
+                cutoff = "2025-01-01 00:00:00"
+                self.assertEqual(len(database.load_papers_for_download(
+                    status="failed", attempt_before=cutoff
+                )), 1)
+                database.save_download(paper, False, "new failure")
+                self.assertEqual(database.load_papers_for_download(
+                    status="failed", attempt_before=cutoff
+                ), [])
 
     def test_impact_factor_import_uses_latest_year_and_filters_queue(self):
         with tempfile.TemporaryDirectory() as directory:
