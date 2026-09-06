@@ -25,7 +25,8 @@ class PubMedSource:
         for attempt in range(3):
             try:
                 response = client.get(url, params=params, timeout=30)
-                status = int(getattr(response, "status_code", 200))
+                raw_status = getattr(response, "status_code", 200)
+                status = int(raw_status) if isinstance(raw_status, (int, str)) else 200
                 if status == 429 or status >= 500 or status == 408:
                     last_error = RuntimeError(f"HTTP {status}")
                 elif status >= 400:
@@ -184,6 +185,35 @@ class PubMedSource:
 class EuropePmcSource:
     name = "Europe PMC"
 
+    @staticmethod
+    def _json(client: Any, params: dict[str, Any]) -> dict[str, Any]:
+        """Fetch one cursor page, retrying transient gateway/network failures."""
+        last_error: Exception | None = None
+        for attempt in range(4):
+            try:
+                response = client.get(
+                    "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+                    params=params, timeout=(10, 60),
+                )
+                raw_status = getattr(response, "status_code", 200)
+                status = int(raw_status) if isinstance(raw_status, (int, str)) else 200
+                if status == 429 or status == 408 or status >= 500:
+                    last_error = RuntimeError(f"HTTP {status}")
+                elif status >= 400:
+                    raise RuntimeError(f"Europe PMC 请求失败（HTTP {status}）")
+                else:
+                    payload = response.json()
+                    if isinstance(payload, dict):
+                        return payload
+                    last_error = ValueError("JSON 根节点不是对象")
+            except (requests.exceptions.RequestException, ValueError) as exc:
+                last_error = exc
+            if attempt < 3:
+                time.sleep(min(2 ** attempt, 4))
+        raise RuntimeError(
+            f"Europe PMC 单页请求失败（已重试 4 次：{type(last_error).__name__}）"
+        ) from None
+
     def search_species(self, client, species: str, limit: int) -> list[Paper]:
         # Search indexed article text, including body and back matter.
         # Do not restrict discovery to the open-access subset; PDF availability
@@ -196,11 +226,10 @@ class EuropePmcSource:
         while True:
             remaining = limit - len(papers) if limit > 0 else 1000
             page_size = min(max(remaining, 1), 1000)
-            payload = client.get(
-                "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
-                params={"query": query, "format": "json",
-                        "pageSize": page_size, "resultType": "core", "cursorMark": cursor},
-            ).json()
+            payload = self._json(client, {
+                "query": query, "format": "json", "pageSize": page_size,
+                "resultType": "core", "cursorMark": cursor,
+            })
             items = payload.get("resultList", {}).get("result", [])
             for item in items:
                 pmcid = clean_text(item.get("pmcid"))
@@ -228,10 +257,9 @@ class EuropePmcSource:
     def search_doi(self, client, doi: str) -> list[Paper]:
         if not doi:
             return []
-        payload = client.get(
-            "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
-            params={"query": f"DOI:{doi}", "format": "json", "pageSize": 5},
-        ).json()
+        payload = self._json(client, {
+            "query": f"DOI:{doi}", "format": "json", "pageSize": 5,
+        })
         out = []
         for item in payload.get("resultList", {}).get("result", []):
             pmcid = clean_text(item.get("pmcid"))

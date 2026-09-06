@@ -32,7 +32,7 @@ def _search_one_source(source, client, species: str, limit: int):
     # WOS may legitimately take many minutes when limit=0: it returns 50
     # records per page and deliberately throttles requests. Its adapter
     # applies the hard timeout to each HTTP attempt.
-    if source.name == "WOS":
+    if source.name in {"WOS", "Europe PMC"}:
         return source.search_species(client, species, limit)
     timeout_seconds = max(30, int(os.getenv("PAPERFLOW_SOURCE_TIMEOUT", "90")))
     if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
