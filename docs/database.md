@@ -1,5 +1,9 @@
 # SQLite 数据库
 
+[文档中心](README.md) · [服务器维护](server/operations.md)
+
+> 本页命令是 CLI 示例，默认数据库随工作目录变化。服务器管理请显式使用 `sudo -u paperflow env PAPERFLOW_DATA_ROOT=/var/lib/paperflow /opt/paperflow-web/.venv/bin/paperflow ... --db /var/lib/paperflow/paperflow.db`；不要在随机目录直接运行示例后误以为操作了线上库。
+
 默认文件是根目录的 `paperflow.db`，可用所有核心命令的 `--db` 参数修改。数据库由 Python 标准库 `sqlite3` 管理，启用外键和 WAL；重复检索会合并记录，不会反复插入同一篇文章。
 
 ## 表结构

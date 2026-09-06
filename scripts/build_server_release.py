@@ -12,10 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = re.search(r'^version = "([^"]+)"', (ROOT / 'pyproject.toml').read_text(), re.M)[1]
 NAME = f'paperflow-web-{VERSION}'
-DIRS = ('paperflow', 'tests', 'deploy/server', '.github/workflows')
+DIRS = ('paperflow', 'tests', 'deploy/server', '.github/workflows', 'docs')
 FILES = ('README.md', 'LICENSE', 'pyproject.toml', 'requirements.txt', '.env.example', '.gitignore',
          'input.example.txt', 'scripts/build_server_release.py')
-SUFFIXES = {'.py', '.html', '.css', '.js', '.json', '.sh', '.service', '.example', '.yml'}
+SUFFIXES = {'.py', '.html', '.css', '.js', '.json', '.sh', '.service', '.example', '.yml', '.md'}
 
 
 def build():

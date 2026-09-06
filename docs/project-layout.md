@@ -1,51 +1,45 @@
-# 项目结构与本地数据
+# 项目结构与服务器目录
 
-## 核心源码
+[文档中心](README.md)
 
-```text
-paperflow/              可安装的 Python 包
-  cli.py                命令行编排
-  tui.py                Textual 全屏终端界面
-  workflows.py          CLI/TUI 共享的检索、入库和下载队列工作流
-  auth.py               浏览器授权和会话管理
-  config.py             自动加载本机 `.env`
-  models.py             数据模型与去重
-  database.py           SQLite 持久化、查询和旧文本迁移
-  net.py                网络会话、代理和限速
-  sources/              WOS、PubMed、Crossref、S2、CNKI 等检索适配器
-  pdf/                  OA、出版社及其他 PDF 获取通道
-  legacy/               已归档的早期独立脚本
-tests/                  当前主包的离线单元测试
-```
-
-根目录的 `pyproject.toml` 是安装与依赖的权威配置；`requirements.txt` 保留给习惯使用 `pip install -r` 的环境。
-
-安装后可运行 `paperflow tui` 打开数据库概览、文献库、检索、下载队列和影响因子页面。长任务由后台 worker 执行，核心数据仍全部进入同一个 SQLite。
-
-## 本地运行数据
-
-以下内容由运行过程生成或只对当前机器有效，已写入 `.gitignore`：
+## 源码目录
 
 ```text
-sessions/               浏览器登录态，可能含敏感 cookie
-wos_exports/            WOS 导出记录
-downloads/              默认下载目录
-pdf_downloaded/         report 命令的 PDF 结果
-scihub_downloads/       旧下载器结果
-unpaywall_downloads/    旧下载器结果（当前目录约 2 GB）
-*.log                   运行日志
-*.tsv                   DOI、重试和失败中间清单
-abstracts.txt           report 输出
-summary.txt             report 输出
-paperflow.db*            SQLite 主库及 WAL/SHM 临时文件
+README.md                  项目入口与文档导航
+docs/                      安装、配置、使用、API、维护和排错
+paperflow/
+  cli.py                   命令行入口
+  workflows.py             检索、入库与下载工作流
+  database.py              论文和期刊指标 SQLite
+  paths.py                 数据目录解析
+  web/                     Web 页面、JSON API、任务队列和 Worker
+  sources/                 各论文检索来源适配器
+  pdf/                     PDF 获取与校验
+  auth.py                  浏览器授权和会话管理
+  config.py                CLI 配置加载
+deploy/server/             安装器、systemd 单元、配置和 Caddy 示例
+scripts/build_server_release.py  源码发行包构建工具
+tests/                     自动化测试
+.github/workflows/         测试和服务器安装验证
 ```
 
-这些目录没有被移动或删除，以保证现有命令、断点续跑和用户数据继续可用。需要归档时，建议按任务整体复制到项目外的日期目录。
+`pyproject.toml` 定义 Python 包、入口和依赖。运行 `pip install` 后，服务使用安装环境里的程序，源码修改不会自动上线。
 
-远程代理通过 `PAPERFLOW_PROXIES` 环境变量配置（多个地址用逗号分隔），不要把带账号密码的代理 URL 写入源码。
+## 服务器安装目录
 
-CNKI 使用项目内置 Playwright 和 `sessions/cnki.json`，不需要 Kimi WebBridge。首次运行 `paperflow auth login cnki`，登录完成后回终端按回车保存会话。
+| 路径 | 用途 |
+|---|---|
+| `/opt/paperflow-web/.venv` | 当前运行环境链接 |
+| `/opt/paperflow-web/venvs/` | 各次安装保留的环境 |
+| `/opt/paperflow-web/.portable-install` | 安装器管理标记，不应手工伪造 |
+| `/etc/paperflow-web.env` | 配置和私密凭据 |
+| `/etc/systemd/system/paperflow-*.service` | Web、Worker 服务单元 |
+| `/run/paperflow/worker.lock` | Worker 运行锁 |
 
-## 历史项目
+## 数据目录
 
-`download_papers/` 是一个带独立 `.git` 的上游旧项目，并且当前存在未提交改动。它与 `paperflow/legacy/` 的用途不同，因此保持原位，不纳入主项目的结构调整。
+便携安装以 `/var/lib/paperflow` 为数据根目录，包含论文和任务数据库，以及 `downloads/`、`exports/`、`imports/`、`job-logs/`、`sessions/` 等运行目录。应整体备份，不能只备份源码。
+
+本地 CLI 未设置 `PAPERFLOW_DATA_ROOT` 时默认从当前工作目录解析路径；服务器已由 systemd 设置该变量。执行管理命令时显式指定服务器数据目录和数据库，避免意外操作另一份库。具体见 [数据库说明](database.md)。
+
+构建发行包采用明确的文件白名单，包含源码、部署文件、测试和文档，不包含用户数据、实例环境文件或本机运行记录。
