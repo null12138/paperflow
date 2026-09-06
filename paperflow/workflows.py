@@ -29,6 +29,11 @@ def _search_one_source(source, client, species: str, limit: int):
     established while an upstream/proxy never completes the response, so a
     requests read timeout alone is not sufficient protection for the worker.
     """
+    # WOS may legitimately take many minutes when limit=0: it returns 50
+    # records per page and deliberately throttles requests. Its adapter
+    # applies the hard timeout to each HTTP attempt.
+    if source.name == "WOS":
+        return source.search_species(client, species, limit)
     timeout_seconds = max(30, int(os.getenv("PAPERFLOW_SOURCE_TIMEOUT", "90")))
     if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
         return source.search_species(client, species, limit)

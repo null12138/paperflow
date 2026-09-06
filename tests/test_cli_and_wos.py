@@ -103,6 +103,15 @@ class _PagedClient:
 
 
 class WosApiTests(unittest.TestCase):
+    def test_unlimited_wos_search_is_not_wrapped_in_whole_source_timeout(self):
+        from paperflow.workflows import _search_one_source
+        source = Mock(name="source")
+        source.name = "WOS"
+        source.search_species.return_value = ["paper"]
+        with patch("paperflow.workflows.signal.setitimer") as timer:
+            self.assertEqual(_search_one_source(source, Mock(), "Ginkgo", 0), ["paper"])
+        timer.assert_not_called()
+
     def test_transient_500_is_retried(self):
         source = WosSource()
         client = Mock()

@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import requests
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
@@ -191,7 +192,20 @@ class WosSource:
             try:
                 if attempt < len(query_variants):
                     request_kwargs["params"]["q"] = query_variants[attempt]
-                response = request_client.get(WOS_API_URL, **request_kwargs)
+                timeout_seconds = max(30, int(os.getenv("PAPERFLOW_SOURCE_TIMEOUT", "90")))
+                if threading.current_thread() is threading.main_thread() and hasattr(signal, "setitimer"):
+                    previous = signal.getsignal(signal.SIGALRM)
+                    def on_timeout(_signum, _frame):
+                        raise requests.exceptions.Timeout(f"WOS 单页请求超过 {timeout_seconds} 秒")
+                    signal.signal(signal.SIGALRM, on_timeout)
+                    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+                    try:
+                        response = request_client.get(WOS_API_URL, **request_kwargs)
+                    finally:
+                        signal.setitimer(signal.ITIMER_REAL, 0)
+                        signal.signal(signal.SIGALRM, previous)
+                else:
+                    response = request_client.get(WOS_API_URL, **request_kwargs)
                 status = int(getattr(response, "status_code", 0))
                 if status == 400 and attempt + 1 < len(query_variants):
                     last_error = RuntimeError(self._error_summary(response) or "查询格式不兼容")
