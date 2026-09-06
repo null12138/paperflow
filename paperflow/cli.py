@@ -231,7 +231,9 @@ def cmd_run(args: argparse.Namespace) -> int:
     ok_count = fail_count = 0
     mode_tokens = {part.strip().casefold() for part in args.mode.replace(",", "+").split("+") if part.strip()}
     with PaperDatabase(args.db) as database:
+        print(f"正在去重并写入文献库：{len(papers)} 篇…", flush=True)
         database.save_papers(papers)
+        print(f"文献库写入完成：{len(papers)} 篇", flush=True)
         if os.getenv("PAPERFLOW_JOB_ID"):
             from .web.archive import save_corpus
             save_corpus(int(os.environ["PAPERFLOW_JOB_ID"]), papers)

@@ -41,6 +41,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_doi
     ON papers(doi) WHERE doi <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_pmid
     ON papers(pmid) WHERE pmid <> '';
+CREATE INDEX IF NOT EXISTS idx_papers_pmcid
+    ON papers(pmcid) WHERE pmcid <> '';
 CREATE INDEX IF NOT EXISTS idx_papers_title ON papers(normalized_title);
 
 CREATE TABLE IF NOT EXISTS keywords (
