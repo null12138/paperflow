@@ -166,7 +166,7 @@ class WebAppTests(unittest.TestCase):
             self.assertIn("任务 #${created.id} 已创建", script)
             self.assertIn("finally { button.disabled = false; }", script)
 
-    def test_public_api_accepts_and_validates_article_limit(self):
+    def test_public_keyword_api_uses_hidden_server_source_limit(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             os.environ, {"PAPERFLOW_DATA_ROOT": directory}, clear=False
         ):
@@ -174,9 +174,9 @@ class WebAppTests(unittest.TestCase):
             client = create_app({"TESTING": True, "WTF_CSRF_DISABLED": True, "SECRET_KEY": "test"}).test_client()
             response = client.post("/api/jobs", json={"workflow": "metadata", "mode": "keyword", "items": ["p450"], "limit": 25})
             self.assertEqual(response.status_code, 202)
-            self.assertEqual(JobStore().list(1)[0]["params"]["limit"], 25)
-            invalid = client.post("/api/jobs", json={"workflow": "metadata", "items": ["p450"], "limit": -1})
-            self.assertEqual(invalid.status_code, 400)
+            self.assertEqual(JobStore().list(1)[0]["params"]["limit"], 0)
+            page = client.get("/").get_data(as_text=True)
+            self.assertNotIn('type="number"', page)
 
     def test_file_browser_is_confined_to_paperflow_output_directories(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(

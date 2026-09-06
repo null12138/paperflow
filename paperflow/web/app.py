@@ -684,7 +684,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         if not items:
             return jsonify(error="请至少提供一条关键词或 DOI"), 400
         try:
-            limit = _web_limit(payload.get("limit", 0))
+            # Keyword source volume is controlled by the hidden server policy
+            # PAPERFLOW_SOURCE_RESULT_LIMIT, not by public form/API input.
+            limit = _web_limit(payload.get("limit", 0)) if mode == "doi" else 0
             if workflow == "metadata":
                 if mode != "keyword":
                     raise ValueError("摘要检索只接受关键词")

@@ -29,14 +29,18 @@ def _search_one_source(source, client, species: str, limit: int):
     established while an upstream/proxy never completes the response, so a
     requests read timeout alone is not sufficient protection for the worker.
     """
-    # WOS may legitimately take many minutes when limit=0: it returns 50
+    configured_cap = max(0, int(os.getenv("PAPERFLOW_SOURCE_RESULT_LIMIT", "500")))
+    effective_limit = limit
+    if configured_cap and (effective_limit <= 0 or effective_limit > configured_cap):
+        effective_limit = configured_cap
+    # WOS may legitimately take many minutes when unlimited: it returns 50
     # records per page and deliberately throttles requests. Its adapter
     # applies the hard timeout to each HTTP attempt.
     if source.name in {"WOS", "Europe PMC"}:
-        return source.search_species(client, species, limit)
+        return source.search_species(client, species, effective_limit)
     timeout_seconds = max(30, int(os.getenv("PAPERFLOW_SOURCE_TIMEOUT", "90")))
     if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
-        return source.search_species(client, species, limit)
+        return source.search_species(client, species, effective_limit)
     previous = signal.getsignal(signal.SIGALRM)
 
     def on_timeout(_signum, _frame):
@@ -45,7 +49,7 @@ def _search_one_source(source, client, species: str, limit: int):
     signal.signal(signal.SIGALRM, on_timeout)
     signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
     try:
-        return source.search_species(client, species, limit)
+        return source.search_species(client, species, effective_limit)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)

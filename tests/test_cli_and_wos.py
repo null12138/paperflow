@@ -108,9 +108,22 @@ class WosApiTests(unittest.TestCase):
         source = Mock(name="source")
         source.name = "WOS"
         source.search_species.return_value = ["paper"]
-        with patch("paperflow.workflows.signal.setitimer") as timer:
+        with patch.dict(os.environ, {"PAPERFLOW_SOURCE_RESULT_LIMIT": "0"}), patch("paperflow.workflows.signal.setitimer") as timer:
             self.assertEqual(_search_one_source(source, Mock(), "Ginkgo", 0), ["paper"])
         timer.assert_not_called()
+
+    def test_source_result_limit_defaults_to_500_and_zero_disables_it(self):
+        from paperflow.workflows import _search_one_source
+        source = Mock()
+        source.name = "WOS"
+        source.search_species.return_value = []
+        with patch.dict(os.environ, {}, clear=True):
+            _search_one_source(source, Mock(), "Ginkgo", 0)
+        self.assertEqual(source.search_species.call_args.args[2], 500)
+        source.reset_mock()
+        with patch.dict(os.environ, {"PAPERFLOW_SOURCE_RESULT_LIMIT": "0"}):
+            _search_one_source(source, Mock(), "Ginkgo", 0)
+        self.assertEqual(source.search_species.call_args.args[2], 0)
 
     def test_transient_500_is_retried(self):
         source = WosSource()

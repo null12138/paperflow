@@ -69,9 +69,7 @@
     button = button || form.querySelector('button[type="submit"]');
     error.textContent = ''; button.disabled = true; statusElement.className = 'job-status is-visible is-running'; statusElement.textContent = '正在创建任务…';
     try {
-      const limitField = form.querySelector('input[type="number"]');
-      const limit = limitField ? Number(limitField.value || 0) : 0;
-      const response = await fetch('/api/jobs', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf}, body: JSON.stringify({workflow, mode: workflow === 'metadata' ? 'keyword' : mode, items, limit})});
+      const response = await fetch('/api/jobs', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrf}, body: JSON.stringify({workflow, mode: workflow === 'metadata' ? 'keyword' : mode, items})});
       const created = await response.json(); if (!response.ok) throw new Error(created.error || '创建任务失败');
       setStatus(`任务 #${created.id} 已创建，将在后台持续运行。`, 'running', `/jobs/${created.id}`, statusElement);
       toast(`任务 #${created.id} 已进入后台，您可以继续创建任务或关闭页面。`);
