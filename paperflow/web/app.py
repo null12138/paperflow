@@ -540,7 +540,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         listed_jobs = [_public_job(job) for job in store().list(200)]
         for job in listed_jobs:
             job["archive_ready"] = (
-                job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and download_archive_path(job["id"]).is_file()
+                job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and (download_archive_path(job["id"]).is_file() or bool(job.get("archive_url")))
             )
         return render_template(
             "jobs.html", jobs=listed_jobs, sources=SOURCE_NAMES
@@ -602,7 +602,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         job = store().get(job_id)
         if job is None:
             abort(404)
-        archive_ready = job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and download_archive_path(job_id).is_file()
+        archive_ready = job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and (download_archive_path(job_id).is_file() or bool(job.get("archive_url")))
         return render_template(
             "job.html", job=_public_job(job), log=_public_log(store().read_log(job)),
             archive_ready=archive_ready,
@@ -620,7 +620,13 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     def download_archive(job_id: int):
         job = store().get(job_id)
         archive = download_archive_path(job_id)
-        if job is None or job["kind"] not in {"download_list", "download_db", "full_run"} or job["status"] != "succeeded" or not archive.is_file():
+        if job is None or job["kind"] not in {"download_list", "download_db", "full_run"} or job["status"] != "succeeded":
+            abort(404)
+        from .oss import signed_archive_url
+        remote = signed_archive_url(job_id)
+        if remote:
+            return redirect(remote)
+        if not archive.is_file():
             abort(404)
         return send_file(archive, as_attachment=True, download_name=archive.name)
 
@@ -650,7 +656,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         for job in store().list(100):
             public = _public_job(job)
             public["archive_ready"] = (
-                job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and download_archive_path(job["id"]).is_file()
+                job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and (download_archive_path(job["id"]).is_file() or bool(job.get("archive_url")))
             )
             result.append(public)
         return jsonify(result)
@@ -735,9 +741,9 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         if job is None:
             abort(404)
         public = _public_job(job, log=store().read_log(job))
-        public["archive_url"] = (job.get("archive_url") or url_for("api_v1_archive", job_id=job_id)) if job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and download_archive_path(job_id).is_file() else None
+        public["archive_url"] = url_for("api_v1_archive", job_id=job_id) if job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and (download_archive_path(job_id).is_file() or bool(job.get("archive_url"))) else None
         public["archive_ready"] = (
-            job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and download_archive_path(job_id).is_file()
+            job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and (download_archive_path(job_id).is_file() or bool(job.get("archive_url")))
         )
         return jsonify(public)
 
