@@ -224,8 +224,10 @@ class EuropePmcSource:
         papers = []
         cursor = "*"
         while True:
-            remaining = limit - len(papers) if limit > 0 else 1000
-            page_size = min(max(remaining, 1), 1000)
+            # Core records include abstracts and author lists; 1000-record
+            # responses regularly exceed the upstream/proxy read window.
+            remaining = limit - len(papers) if limit > 0 else 250
+            page_size = min(max(remaining, 1), 250)
             payload = self._json(client, {
                 "query": query, "format": "json", "pageSize": page_size,
                 "resultType": "core", "cursorMark": cursor,
