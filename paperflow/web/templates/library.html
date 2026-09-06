@@ -2,18 +2,20 @@
 {% block title %}文献库 · Paperflow{% endblock %}
 {% block content %}
 <div class="page-head"><div><p class="eyebrow">Library</p><h1>文献库</h1></div></div>
-<form class="filter-bar" method="get">
-  <input name="q" value="{{ filters.text }}" placeholder="题名、DOI、期刊或摘要">
-  <input name="keyword" value="{{ filters.keyword }}" placeholder="精确关键词">
-  <input name="source" value="{{ filters.source }}" placeholder="来源，如 WOS">
-  <select name="status">
+<p class="muted">搜索已入库的题名、摘要、作者、DOI、关键词和来源。多个词用空格分隔，需同时匹配；新增外部检索请前往首页。</p>
+<form class="filter-bar" method="get" action="{{ url_for('library') }}">
+  <input name="q" value="{{ filters.text }}" aria-label="搜索文献库" placeholder="输入关键词、题名、作者或 DOI">
+  <input name="source" value="{{ filters.source }}" aria-label="筛选来源" placeholder="来源（可选），如 WOS">
+  <select name="status" aria-label="下载状态">
     {% for value, label in [('', '全部状态'), ('pending','未尝试'), ('failed','失败'), ('downloaded','已有 PDF'), ('candidate','已有候选')] %}
       <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
     {% endfor %}
   </select>
-  <input class="small-input" name="min_if" value="{{ filters.min_if if filters.min_if is not none else '' }}" placeholder="最低 IF">
-  <button class="button primary" type="submit">筛选</button>
+  <input class="small-input" name="min_if" value="{{ filters.min_if if filters.min_if is not none else '' }}" aria-label="最低影响因子" placeholder="最低 IF">
+  <input class="small-input" name="max_if" value="{{ filters.max_if if filters.max_if is not none else '' }}" aria-label="最高影响因子" placeholder="最高 IF">
+  <button class="button primary" type="submit">搜索</button>
 </form>
+<p><a href="{{ url_for('library') }}">清除搜索与筛选</a> · 本页 {{ papers|length }} 条</p>
 <section class="panel flush">
   <div class="table-wrap"><table>
     <thead><tr><th>年份</th><th>题名</th><th>期刊 / DOI</th><th>来源</th><th>PDF</th></tr></thead>
@@ -23,12 +25,12 @@
       <td><div>{{ paper.journal or '-' }}</div><small>{{ paper.doi or '无 DOI' }}</small></td>
       <td>{{ paper.sources or '-' }}</td>
       <td>{% if paper.pdf_path %}<span class="badge succeeded">已下载</span>{% else %}<span class="badge muted">待处理</span>{% endif %}</td>
-    </tr>{% else %}<tr><td colspan="5" class="empty">没有匹配记录</td></tr>{% endfor %}</tbody>
+    </tr>{% else %}<tr><td colspan="5" class="empty">没有匹配记录。请缩短搜索词或清除筛选；这里只搜索已入库文献。</td></tr>{% endfor %}</tbody>
   </table></div>
 </section>
 <div class="pager">
-  {% if page > 1 %}<a class="button" href="{{ url_for('library', page=page-1, q=filters.text, keyword=filters.keyword, source=filters.source, status=filters.status, min_if=filters.min_if or '') }}">上一页</a>{% endif %}
+  {% if page > 1 %}<a class="button" href="{{ url_for('library', page=page-1, q=filters.text, source=filters.source, status=filters.status, min_if=filters.min_if if filters.min_if is not none else '', max_if=filters.max_if if filters.max_if is not none else '') }}">上一页</a>{% endif %}
   <span>第 {{ page }} 页</span>
-  {% if has_next %}<a class="button" href="{{ url_for('library', page=page+1, q=filters.text, keyword=filters.keyword, source=filters.source, status=filters.status, min_if=filters.min_if or '') }}">下一页</a>{% endif %}
+  {% if has_next %}<a class="button" href="{{ url_for('library', page=page+1, q=filters.text, source=filters.source, status=filters.status, min_if=filters.min_if if filters.min_if is not none else '', max_if=filters.max_if if filters.max_if is not none else '') }}">下一页</a>{% endif %}
 </div>
 {% endblock %}
