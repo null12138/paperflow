@@ -54,6 +54,7 @@ sudo systemctl is-active paperflow-web paperflow-worker
 |---|---|---|
 | `PAPERFLOW_DOWNLOAD_WORKERS` | `4` | PDF 下载线程数 |
 | `PAPERFLOW_DOWNLOAD_BATCH_SIZE` | `50` | 每批处理的论文数量 |
+| `PAPERFLOW_SOURCE_RESULT_LIMIT` | `500` | 每个关键词、每个来源最多获取的篇数；设为 `0` 取消限制 |
 | `PAPERFLOW_LOCAL_DISK_PATH` | `/` | 检查可用空间的文件系统路径 |
 | `PAPERFLOW_MIN_FREE_GB` | `3` | 下载等待所用的最低可用空间阈值 |
 | `PAPERFLOW_STORAGE_WAIT_SECONDS` | `30` | 空间不足后的等待检查间隔（秒） |
