@@ -6,6 +6,7 @@ import json
 import csv
 import re
 import sqlite3
+import unicodedata
 from pathlib import Path
 from typing import Iterable
 
@@ -117,11 +118,17 @@ def _unique(values: Iterable[str]) -> list[str]:
     return result
 
 
+def _search_text(value: str | None) -> str:
+    """Normalize visible text consistently for Unicode-aware literal searches."""
+    return " ".join(unicodedata.normalize("NFKC", value or "").casefold().split())
+
+
 class PaperDatabase:
     def __init__(self, path: str | Path = "paperflow.db") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(str(self.path))
+        self.connection.create_function("paperflow_fold", 1, _search_text, deterministic=True)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA journal_mode = WAL")
         self.connection.execute("PRAGMA foreign_keys = ON")
@@ -165,6 +172,19 @@ class PaperDatabase:
             "UPDATE papers SET normalized_journal = ? WHERE id = ?",
             [(normalize_title(row["journal"]), row["id"]) for row in rows],
         )
+        # Repair identity keys left behind by older merges.  A stale key can
+        # reserve another paper's DOI and make a later insert fail with a
+        # UNIQUE constraint even though the row's own identifiers differ.
+        rows = self.connection.execute("SELECT id, identity_key, title, doi, pmid FROM papers ORDER BY id").fetchall()
+        used = set()
+        for row in rows:
+            expected = Paper(title=row["title"], doi=row["doi"], pmid=row["pmid"]).key
+            key = expected if expected not in used else f"legacy:{row['id']}:{expected}"
+            used.add(key)
+            if key != row["identity_key"]:
+                self.connection.execute("UPDATE papers SET identity_key = ? WHERE id = ?", (key, row["id"]))
+        self.connection.commit()
+
         self.connection.commit()
 
     def __enter__(self) -> "PaperDatabase":
@@ -255,15 +275,30 @@ class PaperDatabase:
                 normalized = row["normalized_title"]
             old_authors = json.loads(row["authors_json"] or "[]")
             authors = _unique([*old_authors, *paper.authors])
-            identity_key = row["identity_key"]
-            preferred_key = paper.key
-            if identity_key.startswith("title:") and preferred_key.startswith(("doi:", "pmid:")):
-                collision = self.connection.execute(
-                    "SELECT id FROM papers WHERE identity_key = ? AND id <> ?", (preferred_key, row["id"])
-                ).fetchone()
-                if not collision:
-                    identity_key = preferred_key
             old_title = clean_text(row["title"])
+            title = paper.title if not doi_placeholder and len(paper.title) >= len(old_title) else old_title
+            # Derive identity and normalized title from the values actually stored.
+            # A PMID-only row may gain a DOI or a corrected PMID in the same batch;
+            # retaining its old key makes the next incoming PMID record collide.
+            identity_key = Paper(
+                title=title, doi=paper.doi or row["doi"], pmid=paper.pmid or row["pmid"]
+            ).key
+            collision = self.connection.execute(
+                "SELECT * FROM papers WHERE identity_key = ? AND id <> ?", (identity_key, row["id"])
+            ).fetchone()
+            if collision:
+                # Legacy keys may lag behind the identifiers stored in their row.
+                # Release a stale reservation, preserving that row and all relations.
+                actual_key = Paper(title=collision["title"], doi=collision["doi"], pmid=collision["pmid"]).key
+                if actual_key != identity_key:
+                    occupied = self.connection.execute(
+                        "SELECT id FROM papers WHERE identity_key = ?", (actual_key,)
+                    ).fetchone()
+                    if occupied:
+                        actual_key = f"legacy:{collision['id']}:{actual_key}"
+                    self.connection.execute("UPDATE papers SET identity_key = ? WHERE id = ?", (actual_key, collision["id"]))
+                else:
+                    identity_key = row["identity_key"]
             old_abstract = clean_text(row["abstract"])
             abstract = paper.abstract if len(paper.abstract) > len(old_abstract) else old_abstract
             pdf_path = paper.downloaded_path or row["pdf_path"]
@@ -283,8 +318,8 @@ class PaperDatabase:
                     paper.doi or row["doi"],
                     paper.pmid or row["pmid"],
                     paper.pmcid or row["pmcid"],
-                    normalized or row["normalized_title"],
-                    paper.title if not doi_placeholder and len(paper.title) >= len(old_title) else old_title,
+                    normalize_title(title) or clean_text(title).casefold(),
+                    title,
                     abstract,
                     paper.year or row["year"],
                     paper.journal or row["journal"],
@@ -444,10 +479,23 @@ class PaperDatabase:
         if source:
             conditions.append("EXISTS (SELECT 1 FROM paper_sources ps2 JOIN sources s2 ON s2.id = ps2.source_id WHERE ps2.paper_id = p.id AND s2.name = ? COLLATE NOCASE)")
             params.append(source)
-        if text:
-            conditions.append("(lower(p.title) LIKE lower(?) OR lower(p.doi) LIKE lower(?) OR lower(p.journal) LIKE lower(?) OR lower(p.abstract) LIKE lower(?) OR EXISTS (SELECT 1 FROM paper_keywords pk3 JOIN keywords k3 ON k3.id=pk3.keyword_id WHERE pk3.paper_id=p.id AND lower(k3.keyword) LIKE lower(?)) OR EXISTS (SELECT 1 FROM paper_sources ps3 JOIN sources s3 ON s3.id=ps3.source_id WHERE ps3.paper_id=p.id AND lower(s3.name) LIKE lower(?)))")
-            pattern = f"%{clean_text(text)}%"
-            params.extend((pattern, pattern, pattern, pattern, pattern, pattern))
+        query = _search_text(text)
+        if query.startswith(("https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "doi:")):
+            query = normalize_doi(query)
+        for term in dict.fromkeys(query.split()):
+            # All terms must occur, but may occur in different metadata fields.
+            # instr treats %, _ and backslashes literally rather than as SQL wildcards.
+            fields = ("p.title", "p.doi", "p.journal", "p.abstract", "p.authors_json",
+                      "p.pmid", "p.pmcid", "p.year")
+            matches = [f"instr(paperflow_fold({field}), ?) > 0" for field in fields]
+            matches.extend((
+                "EXISTS (SELECT 1 FROM paper_keywords pk3 JOIN keywords k3 ON k3.id=pk3.keyword_id "
+                "WHERE pk3.paper_id=p.id AND instr(paperflow_fold(k3.keyword), ?) > 0)",
+                "EXISTS (SELECT 1 FROM paper_sources ps3 JOIN sources s3 ON s3.id=ps3.source_id "
+                "WHERE ps3.paper_id=p.id AND instr(paperflow_fold(s3.name), ?) > 0)",
+            ))
+            conditions.append("(" + " OR ".join(matches) + ")")
+            params.extend([term] * len(matches))
         if status == "pending":
             conditions.extend((
                 "p.pdf_path = ''",

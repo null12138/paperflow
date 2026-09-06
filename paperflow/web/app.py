@@ -515,17 +515,17 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
             "keyword": request.args.get("keyword", "").strip(),
             "source": request.args.get("source", "").strip(),
             "status": request.args.get("status", "").strip(),
-            "text": request.args.get("q", "").strip(),
+            "text": request.args.get("q", "").strip() or request.args.get("keyword", "").strip(),
             "min_if": _optional_float(request.args.get("min_if", "")),
             "max_if": _optional_float(request.args.get("max_if", "")),
         }
         with PaperDatabase(data_path("paperflow.db")) as database:
             rows = database.list_papers(
-                keyword=filters["keyword"], source=filters["source"], status=filters["status"],
+                source=filters["source"], status=filters["status"],
                 min_if=filters["min_if"], max_if=filters["max_if"], text=filters["text"],
-                limit=page_size, offset=(page - 1) * page_size,
+                limit=page_size + 1, offset=(page - 1) * page_size,
             )
-        return render_template("library.html", papers=rows, filters=filters, page=page, has_next=len(rows) == page_size)
+        return render_template("library.html", papers=rows[:page_size], filters=filters, page=page, has_next=len(rows) > page_size)
 
     @app.get("/papers/<int:paper_id>")
     def paper_detail(paper_id: int):
