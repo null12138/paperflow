@@ -23,6 +23,9 @@ run_summary.txt
 paperflow.db
 paperflow.db-shm
 paperflow.db-wal
+paperflow-jobs.db
+paperflow-jobs.db-shm
+paperflow-jobs.db-wal
 paperflow.pre-*.db
 paperflow.before-*.db.bak
 *.db.bak
@@ -36,6 +39,9 @@ scihub_downloads/
 unpaywall_downloads/
 wos_exports/
 wos_api_runs/
+job-logs/
+exports/
+imports/
 input.txt
 doi_list.tsv
 cnki_ginkgo_list.txt
@@ -47,3 +53,11 @@ cnki_ginkgo_list.txt
 task_plan.md
 findings.md
 progress.md
+
+# Deployment artifacts and local reports
+DEPLOYMENT_STATUS.md
+delivery_*/
+output/
+paperflow_delivery_*.zip
+doi_list*.txt
+download_failed*.txt

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ paper.title }} · Paperflow{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('library') }}">← 返回文献库</a>
+<article class="paper-detail">
+  <p class="eyebrow">{{ paper.year or '年份未知' }} · {{ paper.journal or '期刊未知' }}</p>
+  <h1>{{ paper.title }}</h1>
+  <div class="meta-grid">
+    <div><span>DOI</span><strong>{{ paper.doi or '-' }}</strong></div>
+    <div><span>来源</span><strong>{{ paper.sources or '-' }}</strong></div>
+    <div><span>关键词</span><strong>{{ paper.keywords or '-' }}</strong></div>
+    <div><span>影响因子</span><strong>{{ paper.impact_factor or '-' }}</strong></div>
+    <div><span>PDF 路径</span><strong>{{ paper.pdf_path or '-' }}</strong></div>
+    <div><span>下载源</span><strong>{{ paper.download_source or '-' }}</strong></div>
+  </div>
+  <section><h2>摘要</h2><p class="abstract">{{ paper.abstract or '暂无摘要。' }}</p></section>
+  {% if paper.failure_reason %}<section><h2>最近失败</h2><div class="callout error">{{ paper.failure_reason }}</div></section>{% endif %}
+</article>
+<div class="split">
+  <section class="panel"><h2>PDF 候选</h2>{% for item in paper.candidates %}<div class="list-row"><span>{{ item.source }}</span><code>{{ item.url }}</code></div>{% else %}<div class="empty">暂无候选</div>{% endfor %}</section>
+  <section class="panel"><h2>下载历史</h2>{% for item in paper.attempts %}<div class="list-row"><span class="badge {{ 'succeeded' if item.success else 'failed' }}">{{ '成功' if item.success else '失败' }}</span><div>{{ item.detail }}<small>{{ item.attempted_at }}</small></div></div>{% else %}<div class="empty">暂无记录</div>{% endfor %}</section>
+</div>
+{% endblock %}

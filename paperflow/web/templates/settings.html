@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}配置 · Paperflow{% endblock %}
+{% block content %}
+<div class="page-head"><div><p class="eyebrow">Runtime</p><h1>配置状态</h1><p>只显示是否配置，不展示任何密钥值。</p></div></div>
+<div class="split">
+  <section class="panel"><h2>路径</h2><div class="list-row"><span>数据根目录</span><code>{{ data_root_path }}</code></div><div class="list-row"><span>论文数据库</span><code>{{ database_path }}</code></div><div class="list-row"><span>任务数据库</span><code>{{ jobs_path }}</code></div></section>
+  <section class="panel"><h2>下载服务</h2>{% for name in session_files %}<div class="list-row"><span class="badge succeeded">已连接</span><span>下载服务已准备好</span></div>{% else %}<div class="empty">当前使用公开来源和已配置的下载通道。</div>{% endfor %}</section>
+</div>
+<section class="panel"><h2>环境变量</h2><div class="settings-grid">{% for key, present in environment.items() %}<div><code>{{ key }}</code><span class="badge {{ 'succeeded' if present else 'muted' }}">{{ '已配置' if present else '未配置' }}</span></div>{% endfor %}</div></section>
+{% endblock %}

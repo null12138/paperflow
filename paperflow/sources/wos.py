@@ -147,6 +147,30 @@ class WosSource:
         escaped = species.replace("\\", "\\\\").replace('"', '\\"')
         return f'TS=("{escaped}")'
 
+    @staticmethod
+    def _query_variants(species: str) -> list[str]:
+        """Return compatible Starter API query forms for older API gateways."""
+        escaped = species.replace("\\", "\\\\").replace('"', '\\"')
+        return list(dict.fromkeys((
+            f'TS=("{escaped}")',
+            f'TS={escaped}',
+            escaped,
+        )))
+
+    @staticmethod
+    def _error_summary(response: Any) -> str:
+        """Extract a short non-secret explanation from an error response."""
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                for key in ("message", "error", "description", "details"):
+                    value = payload.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return re.sub(r"\s+", " ", value).strip()[:160]
+        except Exception:
+            pass
+        return ""
+
     def _request_page(
         self, client: Any, species: str, page: int, request_interval: float,
     ) -> tuple[list[dict[str, Any]], int, int | None, int | None]:
@@ -162,9 +186,24 @@ class WosSource:
         response = None
         last_error: Exception | None = None
         request_client = client
+        query_variants = self._query_variants(species)
         for attempt in range(3):
             try:
+                if attempt < len(query_variants):
+                    request_kwargs["params"]["q"] = query_variants[attempt]
                 response = request_client.get(WOS_API_URL, **request_kwargs)
+                status = int(getattr(response, "status_code", 0))
+                if status == 400 and attempt + 1 < len(query_variants):
+                    last_error = RuntimeError(self._error_summary(response) or "查询格式不兼容")
+                    continue
+                if status < 500 and status not in {408, 429}:
+                    break
+                # WOS 5xx/408 are transient.  Retry before failing the source;
+                # 429 is left to the explicit rate-limit message below.
+                if attempt < 2:
+                    retry_after = _header_int(getattr(response, "headers", {}), "Retry-After")
+                    time.sleep(min(max(retry_after or (attempt + 1), 1), 30))
+                    continue
                 break
             except requests.exceptions.ProxyError as exc:
                 last_error = exc
@@ -191,7 +230,9 @@ class WosSource:
         if status >= 500:
             raise WosApiError(f"WOS API 服务暂时不可用（HTTP {status}）")
         if status != 200:
-            raise WosApiError(f"WOS API 请求失败（HTTP {status or 'unknown'}）")
+            detail = self._error_summary(response)
+            suffix = f"：{detail}" if detail else ""
+            raise WosApiError(f"WOS API 请求失败（HTTP {status or 'unknown'}{suffix}）")
         try:
             payload = response.json()
         except Exception:

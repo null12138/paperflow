@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="description" content="PaperFlow 学术文献检索与 PDF 下载">
+  <title>PaperFlow · 文献检索与下载</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v=asset_version) }}">
+</head>
+<body>
+  <header class="site-header"><a class="brand" href="{{ url_for('dashboard') }}" aria-label="PaperFlow 首页"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M8 5.5h11l5 5V26.5H8z"/><path d="M19 5.5v5h5M12 16h8M12 20h6"/></svg></span><span>Paper<span>Flow</span></span></a><nav class="quiet-nav" aria-label="主要导航"><a href="{{ url_for('dashboard') }}">首页</a><a href="{{ url_for('jobs') }}">任务进度</a><a href="{{ url_for('library') }}">文献库</a></nav></header>
+  <main>
+    <section class="hero" aria-labelledby="page-title"><div class="eyebrow"><span></span> RESEARCH, SORTED.</div><h1 id="page-title">把找论文这件事，<br><em>交给我们。</em></h1><p>Europe PMC 全文检索，WOS 与 PubMed 补充文献。<br>全文范围限 Europe PMC 可索引内容，不覆盖所有付费正文。</p><div class="trust-row"><span>✓ Europe PMC + WOS + PubMed</span><span>✓ 自动获取全文</span><span>✓ 支持断点恢复</span></div></section>
+    <section class="workflows" aria-label="选择处理方式">
+      <article class="workflow-card workflow-card--primary"><div class="card-heading"><div><span class="card-index">01</span><span class="card-label">全流程</span></div><span class="recommended">全文检索 + 多源补充</span></div><h2>检索并下载 PDF</h2><p class="card-description">输入关键词发现文献，系统会自动整理信息并获取可用全文。</p><div class="mode-tabs" role="tablist" aria-label="输入方式"><button class="mode-tab is-active" type="button" role="tab" aria-selected="true" data-mode="keyword">⌕ 上传关键词</button><button class="mode-tab" type="button" role="tab" aria-selected="false" data-mode="doi">↗ 上传 DOI</button></div><form id="download-form" novalidate><label class="field-label" for="download-input"><span id="download-label">关键词清单</span><small>每行一条</small></label><div class="input-shell"><textarea id="download-input" rows="5" placeholder="例如：&#10;Panthera tigris&#10;Ginkgo biloba" required></textarea><div class="input-footer"><span id="download-count">0 条内容</span><label class="upload-link" for="download-file">↑ 上传 TXT / CSV</label><input id="download-file" type="file" accept=".txt,.csv,.tsv,text/plain,text/csv" hidden></div></div><label class="limit-field" for="download-limit"><span>最多处理篇数</span><small>填 0 表示不限制</small><input id="download-limit" type="number" min="0" max="100000" value="0" inputmode="numeric"></label><div class="process-line"><span id="process-step-1">检索文献</span><i></i><span id="process-step-2">整理文献信息</span><i></i><span>获取 PDF</span></div><p class="field-error" id="download-error" role="alert"></p><button class="primary-button" type="submit"><span id="download-button-label">开始检索并下载</span><span>→</span></button><div class="job-status" id="download-status" role="status" aria-live="polite"></div></form></article>
+      <article class="workflow-card"><div class="card-heading"><div><span class="card-index">02</span><span class="card-label">轻量检索</span></div></div><h2>只获取摘要与 DOI</h2><p class="card-description">检索 Europe PMC 收录的全文，并结合 WOS、PubMed 生成文献清单；此流程不下载 PDF。</p><form id="metadata-form" novalidate><label class="field-label" for="metadata-input">关键词清单 <small>每行一条</small></label><div class="input-shell input-shell--tall"><textarea id="metadata-input" rows="7" placeholder="例如：&#10;climate change adaptation&#10;urban biodiversity" required></textarea><div class="input-footer"><span id="metadata-count">0 条内容</span><label class="upload-link" for="metadata-file">↑ 上传 TXT / CSV</label><input id="metadata-file" type="file" accept=".txt,.csv,.tsv,text/plain,text/csv" hidden></div></div><label class="limit-field" for="metadata-limit"><span>最多检索篇数</span><small>填 0 表示不限制</small><input id="metadata-limit" type="number" min="0" max="100000" value="0" inputmode="numeric"></label><div class="output-preview"><div class="output-icon">▤</div><div><strong>输出内容</strong><span>标题、作者、年份、摘要、DOI</span></div><span class="csv-tag">TXT</span></div><p class="field-error" id="metadata-error" role="alert"></p><button class="secondary-button" type="submit"><span>获取摘要与 DOI</span><span>→</span></button><div class="job-status" id="metadata-status" role="status" aria-live="polite"></div></form></article>
+    </section>
+    <section class="task-panel" aria-labelledby="tasks-title">
+      <div class="task-panel-head"><div><p class="task-kicker">BACKGROUND QUEUE</p><h2 id="tasks-title">任务与进度</h2></div><a href="{{ url_for('jobs') }}">查看全部任务 →</a></div>
+      <div class="task-list" id="recent-tasks"><div class="task-empty">正在读取任务进度…</div></div>
+    </section>
+  </main>
+  <footer><p>仅处理您有权访问的学术资源</p><span>© 2026 PaperFlow</span></footer>
+  <div class="toast" id="toast" role="status" aria-live="polite"><span class="toast-icon">✓</span><div><strong>任务已创建</strong><span id="toast-message">已进入后台队列。</span></div><button type="button" aria-label="关闭提示">×</button></div>
+  <script defer src="{{ url_for('static', filename='app.js', v=asset_version) }}"></script>
+</body>
+</html>

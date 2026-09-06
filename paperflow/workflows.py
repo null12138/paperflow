@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import shutil
+import threading
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -18,6 +20,30 @@ from .sources import SOURCES
 
 
 Progress = Callable[[str], None]
+
+
+def _search_one_source(source, client, species: str, limit: int):
+    """Run a source search with a process-level guard for blocking clients.
+
+    WOS is used as the default Web source.  A TCP connection can remain
+    established while an upstream/proxy never completes the response, so a
+    requests read timeout alone is not sufficient protection for the worker.
+    """
+    timeout_seconds = max(30, int(os.getenv("PAPERFLOW_SOURCE_TIMEOUT", "90")))
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
+        return source.search_species(client, species, limit)
+    previous = signal.getsignal(signal.SIGALRM)
+
+    def on_timeout(_signum, _frame):
+        raise TimeoutError(f"{source.name} 请求超过 {timeout_seconds} 秒，已中止")
+
+    signal.signal(signal.SIGALRM, on_timeout)
+    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
+    try:
+        return source.search_species(client, species, limit)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def _emit(progress: Progress | None, message: str) -> None:
@@ -41,21 +67,30 @@ def search_to_database(
         _emit(progress, f"检索关键词：{species}")
         def run_one(source):
             try:
-                results = source.search_species(client, species, limit)
+                results = _search_one_source(source, client, species, limit)
                 return source, results, None
             except NotImplementedError as exc:
                 return source, [], f"- {source.name}: 跳过（{clean_text(exc)[:80]}）"
             except Exception as exc:
                 return source, [], f"✗ {source.name}: {clean_text(exc)[:120]}"
-        # 每个关键词下各数据源并行；同一源自身仍负责限速，避免互相拖慢。
-        with ThreadPoolExecutor(max_workers=max(1, min(6, len(sources)))) as pool:
-            futures = [pool.submit(run_one, source) for source in sources]
-            for future in as_completed(futures):
-                source, results, error = future.result()
-                for paper in results:
-                    add_paper(collection, paper)
-                _emit(progress, error or f"  ✓ {source.name}: {len(results)} 条")
+        # 单源（尤其默认的 WOS）在主线程运行，才能使用进程级硬超时；
+        # 多源仍并行，避免一个慢数据源拖慢其他源。
+        if len(sources) == 1:
+            source, results, error = run_one(sources[0])
+            for paper in results:
+                add_paper(collection, paper)
+            _emit(progress, error or f"  ✓ {source.name}: {len(results)} 条")
+        else:
+            with ThreadPoolExecutor(max_workers=max(1, min(6, len(sources)))) as pool:
+                futures = [pool.submit(run_one, source) for source in sources]
+                for future in as_completed(futures):
+                    source, results, error = future.result()
+                    for paper in results:
+                        add_paper(collection, paper)
+                    _emit(progress, error or f"  ✓ {source.name}: {len(results)} 条")
     papers = sorted(unique_papers(collection), key=lambda paper: (paper.title.casefold(), paper.year))
+    if limit > 0:
+        papers = papers[:limit]
     with PaperDatabase(db_path) as database:
         database.save_papers(papers)
     _emit(progress, f"完成：去重后 {len(papers)} 篇，已写入 {db_path}")
@@ -159,6 +194,7 @@ def download_database_queue(
     limit: int = 100,
     min_if: float | None = None,
     max_if: float | None = None,
+    attempt_before: str = "",
     progress: Progress | None = None,
 ) -> dict[str, int]:
     """从 SQLite 恢复论文队列并下载，逐条把结果写回同一数据库。"""
@@ -189,6 +225,7 @@ def download_database_queue(
             limit=limit,
             min_if=min_if,
             max_if=max_if,
+            attempt_before=attempt_before,
         )
         _emit(progress, f"数据库下载队列：{len(papers)} 篇")
         ok_count = fail_count = 0
@@ -197,13 +234,13 @@ def download_database_queue(
         # Network-only channels can safely use parallel workers.  Keep browser
         # authorization serial, but OA/Sci-Hub downloads use independent HTTP
         # sessions and can run in parallel (default 10 as requested).
-        workers = 32 if tokens and tokens <= {"direct", "oa", "pmc", "scihub"} else 1
+        configured_workers = max(1, int(os.getenv("PAPERFLOW_DOWNLOAD_WORKERS", "8")))
+        workers = configured_workers if tokens and tokens <= {"direct", "oa", "pmc", "scihub"} else 1
+        batch_size = max(10, int(os.getenv("PAPERFLOW_DOWNLOAD_BATCH_SIZE", "100")))
 
         tab_count = int(os.getenv("PAPERFLOW_WOS_TABS", "1") or 1)
         if getattr(engine, "wos", None) and tab_count > 1 and len(papers) > 1:
             from .pdf import paper_filename
-            for paper in papers:
-                database.record_download_start(paper)
             pairs = [(p.doi, p) for p in papers if p.doi]
             results = engine.wos.fetch_many(
                 pairs, lambda p: out_dir / paper_filename(p), tab_count=tab_count
@@ -219,19 +256,21 @@ def download_database_queue(
             ok, info = engine.fetch(paper)
             return paper, ok, info
 
-        with ThreadPoolExecutor(max_workers=min(workers, max(1, len(papers)))) as pool:
-            for paper in papers:
-                database.record_download_start(paper)
-            futures = [pool.submit(fetch_one, paper) for paper in papers]
-            for index, future in enumerate(as_completed(futures), 1):
-                paper, ok, info = future.result()
-                database.save_download(paper, ok, info)
-                if ok:
-                    ok_count += 1
-                    _emit(progress, f"[{index}/{len(papers)}] ✓ {paper.title[:60]} | {info[:100]}")
-                else:
-                    fail_count += 1
-                    _emit(progress, f"[{index}/{len(papers)}] ✗ {paper.title[:60]} | {info[:120]}")
+        for batch_start in range(0, len(papers), batch_size):
+            engine.wait_for_storage(lambda message: _emit(progress, message))
+            batch = papers[batch_start:batch_start + batch_size]
+            with ThreadPoolExecutor(max_workers=min(workers, max(1, len(batch)))) as pool:
+                futures = [pool.submit(fetch_one, paper) for paper in batch]
+                for offset, future in enumerate(as_completed(futures), 1):
+                    paper, ok, info = future.result()
+                    database.save_download(paper, ok, info)
+                    index = batch_start + offset
+                    if ok:
+                        ok_count += 1
+                        _emit(progress, f"[{index}/{len(papers)}] ✓ {paper.title[:60]} | {info[:100]}")
+                    else:
+                        fail_count += 1
+                        _emit(progress, f"[{index}/{len(papers)}] ✗ {paper.title[:60]} | {info[:120]}")
     _emit(progress, f"下载完成：成功 {ok_count}，失败 {fail_count}")
     return {"total": len(papers), "success": ok_count, "failed": fail_count}
 
@@ -252,8 +291,46 @@ def preflight_download_candidates(
         papers = database.load_papers_for_download(
             keyword=keyword, source=source, status="all", limit=limit
         )
-        doi_papers = [paper for paper in papers if paper.doi]
         parsed = with_candidates = failed = enriched_abstracts = pmc_candidates = 0
+        recovered_dois = 0
+
+        # Some WOS records and older PubMed records arrive without a DOI even
+        # though Crossref has one. Resolve only high-confidence title matches so
+        # the final retry can use DOI-based channels without risking bad joins.
+        missing_doi = [paper for paper in papers if not paper.doi and paper.title]
+        if missing_doi:
+            def resolve_title(paper: Paper):
+                return paper, oa.crossref_title_match(paper.title, paper.year)
+
+            with ThreadPoolExecutor(max_workers=min(4, len(missing_doi))) as pool:
+                futures = [pool.submit(resolve_title, paper) for paper in missing_doi]
+                for index, future in enumerate(as_completed(futures), 1):
+                    paper, match = future.result()
+                    doi = str(match.get("doi") or "")
+                    # Do not merge a title-only row into a different existing
+                    # DOI row here; deduplication preserves all relationships.
+                    collision = bool(doi and database.connection.execute(
+                        "SELECT 1 FROM papers WHERE doi = ? LIMIT 1", (doi,)
+                    ).fetchone())
+                    if doi and not collision:
+                        paper.doi = doi
+                        recovered_dois += 1
+                    for url in match.get("candidates") or []:
+                        paper.add_candidate(str(url), "crossref", priority=2)
+                    if doi or match.get("candidates"):
+                        database.save_papers([paper])
+                    if index % 25 == 0 or index == len(missing_doi):
+                        _emit(
+                            progress,
+                            f"[DOI {index}/{len(missing_doi)}] 已补全 {recovered_dois} 篇",
+                        )
+
+        # Refresh rows so newly recovered DOI values enter PMC/OA batch lookup.
+        if recovered_dois:
+            papers = database.load_papers_for_download(
+                keyword=keyword, source=source, status="all", limit=limit
+            )
+        doi_papers = [paper for paper in papers if paper.doi]
 
         # DOI -> PMCID can be resolved in large official batches, avoiding
         # thousands of publisher landing-page requests before OA downloading.
@@ -366,7 +443,7 @@ def preflight_download_candidates(
     return {
         "total": len(papers), "parsed": parsed, "with_candidates": with_candidates,
         "pmc_candidates": pmc_candidates, "failed": failed,
-        "enriched_abstracts": enriched_abstracts,
+        "enriched_abstracts": enriched_abstracts, "recovered_dois": recovered_dois,
     }
 
 

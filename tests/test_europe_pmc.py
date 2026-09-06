@@ -25,5 +25,9 @@ class EuropePmcTests(unittest.TestCase):
         papers = EuropePmcSource().search_species(client, "Panthera tigris", 0)
         self.assertEqual([paper.title for paper in papers], ["First", "Second"])
         self.assertEqual(client.get.call_count, 2)
+        query = client.get.call_args_list[0].kwargs["params"]["query"]
+        self.assertIn('BODY:"Panthera tigris"', query)
+        self.assertIn('BACK:"Panthera tigris"', query)
+        self.assertNotIn('OPEN_ACCESS:Y', query)
         self.assertIn("?pdf=render", papers[0].pdf_candidates[0].url)
 

@@ -16,7 +16,9 @@ import re
 import sys
 from pathlib import Path
 
-SESSIONS_DIR = Path(__file__).resolve().parent.parent / "sessions"
+from .paths import data_path
+
+SESSIONS_DIR = data_path("sessions")
 
 # 站点定义：url=登录起始页；hint=登录成功的 URL 特征（可为空）
 AUTH_SITES: dict[str, dict] = {

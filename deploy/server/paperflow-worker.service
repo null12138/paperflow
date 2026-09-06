@@ -1,0 +1,25 @@
+[Unit]
+Description=Paperflow persistent task worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paperflow
+Group=paperflow
+WorkingDirectory=/var/lib/paperflow
+EnvironmentFile=/etc/paperflow-web.env
+ExecStart=/opt/paperflow-web/.venv/bin/paperflow-worker
+RuntimeDirectory=paperflow
+RuntimeDirectoryMode=0750
+Environment=PAPERFLOW_WORKER_LOCK=/run/paperflow/worker.lock
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0027
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

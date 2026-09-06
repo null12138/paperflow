@@ -1,0 +1,21 @@
+[Unit]
+Description=Paperflow Web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paperflow
+Group=paperflow
+WorkingDirectory=/var/lib/paperflow
+EnvironmentFile=/etc/paperflow-web.env
+ExecStart=/opt/paperflow-web/.venv/bin/paperflow-web
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0027
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

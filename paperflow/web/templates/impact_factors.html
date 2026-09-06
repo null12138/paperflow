@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}影响因子 · Paperflow{% endblock %}
+{% block content %}
+<div class="page-head"><div><p class="eyebrow">Journal Metrics</p><h1>影响因子查询</h1><p>查询已导入的 JCR 或其他合法来源期刊指标。</p></div></div>
+<form class="filter-bar" method="get"><input name="q" value="{{ query }}" placeholder="输入期刊名称"><input class="small-input" name="year" value="{{ year }}" placeholder="年份"><button class="button primary" type="submit">查询</button></form>
+<section class="panel flush"><div class="table-wrap"><table><thead><tr><th>期刊</th><th>年份</th><th>影响因子</th><th>来源</th></tr></thead><tbody>{% for row in rows %}<tr><td>{{ row.journal }}</td><td>{{ row.year }}</td><td><strong>{{ '%.3f'|format(row.impact_factor) }}</strong></td><td>{{ row.source }}</td></tr>{% else %}<tr><td colspan="4">暂无数据，请先导入影响因子表。</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

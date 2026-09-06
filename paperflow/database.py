@@ -211,6 +211,45 @@ class PaperDatabase:
         normalized_journal = normalize_title(paper.journal)
         row = self._find_paper(paper)
         if row:
+            # A DOI record and a PMID-only record may predate the combined
+            # metadata. Consolidate compatible identities before assigning IDs.
+            for column in ("doi", "pmid", "pmcid"):
+                value = getattr(paper, column).strip()
+                if not value:
+                    continue
+                matches = self.connection.execute(
+                    f"SELECT * FROM papers WHERE {column} = ? AND id <> ?",
+                    (value, row["id"]),
+                ).fetchall()
+                for other in matches:
+                    compatible = all(len({v for v in (row[k], other[k], getattr(paper, k)) if v}) <= 1
+                                     for k in ("doi", "pmid", "pmcid"))
+                    if not compatible:
+                        # Conflicting provider identifiers must not overwrite
+                        # another paper's identity or abort the whole import.
+                        setattr(paper, column, row[column])
+                        continue
+                    for table, field in (("paper_keywords", "keyword_id"), ("paper_sources", "source_id")):
+                        self.connection.execute(
+                            f"INSERT OR IGNORE INTO {table}(paper_id, {field}) SELECT ?, {field} FROM {table} WHERE paper_id = ?",
+                            (row["id"], other["id"]),
+                        )
+                    self.connection.execute(
+                        "INSERT OR IGNORE INTO pdf_candidates(paper_id,url,source,priority) SELECT ?,url,source,priority FROM pdf_candidates WHERE paper_id=?",
+                        (row["id"], other["id"]),
+                    )
+                    self.connection.execute("UPDATE download_attempts SET paper_id=? WHERE paper_id=?", (row["id"], other["id"]))
+                    for key in ("doi", "pmid", "pmcid", "year", "journal"):
+                        if not getattr(paper, key):
+                            setattr(paper, key, other[key])
+                    if len(other["abstract"]) > len(paper.abstract):
+                        paper.abstract = other["abstract"]
+                    paper.authors = _unique([*paper.authors, *json.loads(other["authors_json"] or "[]")])
+                    if not paper.downloaded_path and not row["pdf_path"]:
+                        paper.downloaded_path = other["pdf_path"]
+                        paper.download_source = other["download_source"]
+                        paper.download_detail = other["download_detail"]
+                    self.connection.execute("DELETE FROM papers WHERE id=?", (other["id"],))
             doi_placeholder = bool(paper.doi and normalize_doi(paper.title) == paper.doi)
             if doi_placeholder:
                 normalized = row["normalized_title"]
@@ -393,6 +432,9 @@ class PaperDatabase:
         status: str = "",
         min_if: float | None = None,
         max_if: float | None = None,
+        text: str = "",
+        offset: int = 0,
+        attempt_before: str = "",
     ) -> list[sqlite3.Row]:
         params: list[object] = []
         conditions: list[str] = []
@@ -402,8 +444,16 @@ class PaperDatabase:
         if source:
             conditions.append("EXISTS (SELECT 1 FROM paper_sources ps2 JOIN sources s2 ON s2.id = ps2.source_id WHERE ps2.paper_id = p.id AND s2.name = ? COLLATE NOCASE)")
             params.append(source)
+        if text:
+            conditions.append("(lower(p.title) LIKE lower(?) OR lower(p.doi) LIKE lower(?) OR lower(p.journal) LIKE lower(?) OR lower(p.abstract) LIKE lower(?) OR EXISTS (SELECT 1 FROM paper_keywords pk3 JOIN keywords k3 ON k3.id=pk3.keyword_id WHERE pk3.paper_id=p.id AND lower(k3.keyword) LIKE lower(?)) OR EXISTS (SELECT 1 FROM paper_sources ps3 JOIN sources s3 ON s3.id=ps3.source_id WHERE ps3.paper_id=p.id AND lower(s3.name) LIKE lower(?)))")
+            pattern = f"%{clean_text(text)}%"
+            params.extend((pattern, pattern, pattern, pattern, pattern, pattern))
         if status == "pending":
-            conditions.extend(("p.pdf_path = ''", "NOT EXISTS (SELECT 1 FROM download_attempts da WHERE da.paper_id = p.id)"))
+            conditions.extend((
+                "p.pdf_path = ''",
+                "NOT EXISTS (SELECT 1 FROM download_attempts da WHERE da.paper_id = p.id "
+                "AND da.detail <> '下载任务已开始')",
+            ))
         elif status == "failed":
             conditions.extend(("p.pdf_path = ''", "EXISTS (SELECT 1 FROM download_attempts da WHERE da.paper_id = p.id)"))
         elif status == "all":
@@ -421,15 +471,29 @@ class PaperDatabase:
                 "p.pdf_path = ''",
                 "EXISTS (SELECT 1 FROM pdf_candidates pc WHERE pc.paper_id = p.id "
                 "AND lower(pc.source) NOT IN ('publisher', 'cnki'))",
-                "NOT EXISTS (SELECT 1 FROM download_attempts da WHERE da.paper_id = p.id)",
+                "NOT EXISTS (SELECT 1 FROM download_attempts da WHERE da.paper_id = p.id "
+                "AND da.detail <> '下载任务已开始')",
             ))
         elif status == "candidate-pmc-pending":
             conditions.extend((
                 "p.pdf_path = ''",
                 "EXISTS (SELECT 1 FROM pdf_candidates pc WHERE pc.paper_id = p.id AND "
                 "(lower(pc.url) LIKE '%europepmc.org%' OR lower(pc.url) LIKE '%pmc.ncbi.nlm.nih.gov%'))",
-                "NOT EXISTS (SELECT 1 FROM download_attempts da WHERE da.paper_id = p.id)",
+                "NOT EXISTS (SELECT 1 FROM download_attempts da WHERE da.paper_id = p.id "
+                "AND da.detail <> '下载任务已开始')",
             ))
+        elif status == "candidate-pmc":
+            conditions.extend((
+                "p.pdf_path = ''",
+                "EXISTS (SELECT 1 FROM pdf_candidates pc WHERE pc.paper_id = p.id AND "
+                "(lower(pc.url) LIKE '%europepmc.org%' OR lower(pc.url) LIKE '%pmc.ncbi.nlm.nih.gov%'))",
+            ))
+        if attempt_before:
+            conditions.append(
+                "NOT EXISTS (SELECT 1 FROM download_attempts da2 WHERE da2.paper_id = p.id "
+                "AND da2.attempted_at >= ? AND da2.detail <> '下载任务已开始')"
+            )
+            params.append(str(attempt_before))
         if min_if is not None:
             conditions.append("jm.impact_factor >= ?")
             params.append(float(min_if))
@@ -438,7 +502,7 @@ class PaperDatabase:
             params.append(float(max_if))
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
         # 0 表示不设本地上限；SQLite 的 LIMIT -1 会返回全部结果。
-        params.append(-1 if limit == 0 else max(1, int(limit)))
+        params.extend((-1 if limit == 0 else max(1, int(limit)), max(0, int(offset))))
         return self.connection.execute(
             f"""SELECT p.*,
                        GROUP_CONCAT(DISTINCT s.name) AS sources,
@@ -458,9 +522,41 @@ class PaperDatabase:
                 {where}
                 GROUP BY p.id
                 ORDER BY p.year DESC, p.id DESC
-                LIMIT ?""",
+                LIMIT ? OFFSET ?""",
             params,
         ).fetchall()
+
+    def get_paper_detail(self, paper_id: int) -> dict | None:
+        """Return one paper with its relations, candidates and attempt history."""
+        row = self.connection.execute(
+            """SELECT p.*,
+                      GROUP_CONCAT(DISTINCT s.name) AS sources,
+                      GROUP_CONCAT(DISTINCT k.keyword) AS keywords,
+                      jm.impact_factor, jm.year AS impact_factor_year,
+                      jm.source AS impact_factor_source
+               FROM papers p
+               LEFT JOIN journal_metrics jm ON jm.id = (
+                   SELECT jm2.id FROM journal_metrics jm2
+                   WHERE jm2.normalized_journal = p.normalized_journal
+                   ORDER BY jm2.year DESC, jm2.id DESC LIMIT 1
+               )
+               LEFT JOIN paper_sources ps ON ps.paper_id = p.id
+               LEFT JOIN sources s ON s.id = ps.source_id
+               LEFT JOIN paper_keywords pk ON pk.paper_id = p.id
+               LEFT JOIN keywords k ON k.id = pk.keyword_id
+               WHERE p.id = ? GROUP BY p.id""",
+            (int(paper_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["candidates"] = [dict(item) for item in self.connection.execute(
+            "SELECT * FROM pdf_candidates WHERE paper_id = ? ORDER BY priority, id", (paper_id,)
+        ).fetchall()]
+        result["attempts"] = [dict(item) for item in self.connection.execute(
+            "SELECT * FROM download_attempts WHERE paper_id = ? ORDER BY id DESC LIMIT 100", (paper_id,)
+        ).fetchall()]
+        return result
 
     def load_papers_for_download(
         self,
@@ -470,9 +566,13 @@ class PaperDatabase:
         limit: int = 100,
         min_if: float | None = None,
         max_if: float | None = None,
+        attempt_before: str = "",
     ) -> list[Paper]:
         """从持久化队列恢复完整 Paper，包括来源、关键词和 PDF 候选。"""
-        rows = self.list_papers(keyword, limit, source, status, min_if, max_if)
+        rows = self.list_papers(
+            keyword, limit, source, status, min_if, max_if,
+            attempt_before=attempt_before,
+        )
         papers: list[Paper] = []
         for row in rows:
             paper = Paper(

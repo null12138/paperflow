@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}未下载 DOI · Paperflow{% endblock %}
+{% block content %}
+<a class="back" href="{{ url_for('job_detail', job_id=job.id) }}">← 返回任务 #{{ job.id }}</a>
+<section class="page-head"><div><p class="eyebrow">Publisher fallback</p><h1>未下载成功的 DOI</h1><p>链接使用 DOI Resolver，会自动跳转到对应出版社页面。此页面只列出当前没有有效 PDF 的 DOI。</p></div><button class="button primary" type="button" id="open-all-publishers">一键打开全部链接</button></section>
+<section class="panel">
+  {% if links %}<div class="callout">共 {{ links|length }} 个 DOI。浏览器可能会拦截批量弹窗；如果只打开了一个，请允许此站点弹出窗口，或逐个点击链接。</div>
+  <div class="table-wrap"><table><thead><tr><th>#</th><th>DOI / 标题</th><th>出版社链接</th></tr></thead><tbody>
+  {% for item in links %}<tr><td>{{ loop.index }}</td><td><strong>{{ item.title }}</strong><br><code>{{ item.doi }}</code></td><td><a class="publisher-link" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">打开出版社页面 ↗</a></td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="empty">当前没有未下载成功的 DOI，或 DOI 清单文件已不存在。</div>{% endif %}
+</section>
+{% endblock %}

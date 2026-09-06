@@ -12,6 +12,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from .. import net
+from .io import save_streamed_pdf
 
 TIMEOUT = 12
 
@@ -165,10 +166,10 @@ class SciHubEngine:
                     page = _solve_captcha(session, url) or page
                 if page.kind in ("pdf", "framepdf"):
                     try:
-                        r = session.get(page.pdf_url, timeout=TIMEOUT + 15)
+                        r = session.get(page.pdf_url, timeout=TIMEOUT + 15, stream=True)
+                        r.raise_for_status()
                     except requests.RequestException as exc:
                         continue
-                    if r.content[:5] == b"%PDF-":
-                        target.write_bytes(r.content)
+                    if save_streamed_pdf(r, target):
                         return True, f"scihub → {r.url[:80]}"
         return False, "scihub 各镜像失败/未收录"
