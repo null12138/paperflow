@@ -735,7 +735,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         if job is None:
             abort(404)
         public = _public_job(job, log=store().read_log(job))
-        public["archive_url"] = url_for("api_v1_archive", job_id=job_id) if job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and download_archive_path(job_id).is_file() else None
+        public["archive_url"] = (job.get("archive_url") or url_for("api_v1_archive", job_id=job_id)) if job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and download_archive_path(job_id).is_file() else None
         public["archive_ready"] = (
             job["kind"] in {"download_list", "download_db", "full_run"} and job["status"] == "succeeded" and download_archive_path(job_id).is_file()
         )

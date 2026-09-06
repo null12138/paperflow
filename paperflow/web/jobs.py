@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     started_at TEXT,
     finished_at TEXT,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    archive_url TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status_id ON jobs(status, id);
 """
@@ -88,6 +89,9 @@ class JobStore:
             # once at store initialization, not for every read on remote mounts.
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(SCHEMA)
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+            if "archive_url" not in columns:
+                connection.execute("ALTER TABLE jobs ADD COLUMN archive_url TEXT NOT NULL DEFAULT ''")
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(str(self.path), timeout=30)
@@ -105,6 +109,10 @@ class JobStore:
                 "INSERT INTO jobs(kind, params_json) VALUES (?, ?)", (kind, payload)
             )
             return int(cursor.lastrowid)
+
+    def set_archive_url(self, job_id: int, url: str) -> None:
+        with self.connect() as connection:
+            connection.execute("UPDATE jobs SET archive_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (url, job_id))
 
     def get(self, job_id: int) -> dict[str, Any] | None:
         with self.connect() as connection:

@@ -101,7 +101,11 @@ class Worker:
             if return_code == 0 and job["kind"] in {"download_list", "download_db", "full_run"}:
                 try:
                     archive, included = create_download_archive(job)
-                    archive_message = f"ZIP 已生成：{archive.name}（{included} 篇 PDF）"
+                    from .oss import upload_archive
+                    archive_url = upload_archive(archive, job_id)
+                    if archive_url:
+                        self.store.set_archive_url(job_id, archive_url)
+                    archive_message = f"ZIP 已生成：{archive.name}（{included} 篇 PDF）" + ("；OSS 已上传" if archive_url else "")
                     log.write(archive_message + "\n")
                     log.flush()
                     last_line = archive_message
